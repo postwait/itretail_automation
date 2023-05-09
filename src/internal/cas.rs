@@ -65,9 +65,9 @@ impl ScaleFile {
 
             worksheet.write_number(row, 4, itemcode)?;
             worksheet.write_number_with_format(row, 5, item.normal_price, &decimal_format)?;
-            worksheet.write_number(row, 6, 0)?;
+            worksheet.write_number(row, 6, 0)?; // Origin
             worksheet.write_number(row, 7, 0)?; // Label ID
-            worksheet.write_number(row, 8, 0)?;
+            worksheet.write_number(row, 8, 0)?; // Category
             if item.second_description.is_some() {
                 let ingredients = item.second_description.unwrap();
                 if ingredients.len() > 0 {

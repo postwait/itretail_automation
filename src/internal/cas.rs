@@ -24,7 +24,6 @@ const FIELDS : [&str; 19] = ["Department No", "PLU No", "Name1", "Name2", "Itemc
 impl ScaleFile {
     pub fn build_from_itretail_products(&mut self, json: &String) -> Result<()> {
         let items: Vec<super::api::ProductData> = serde_json::from_str(json)?;
-        println!("ITEMS: {}", items.len());
         let items_iter = items.into_iter();
         // we only want items that are not deleted and weighed (002...)
         let weighed_items = items_iter.filter(|x| { !x.deleted && x.upc.starts_with("002") });

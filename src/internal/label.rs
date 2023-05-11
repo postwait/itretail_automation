@@ -1,7 +1,7 @@
-use std::error;
+use clap::ArgMatches;
+use regex::{Regex, RegexBuilder};
 use rust_xlsxwriter::{Format, Workbook};
-use clap::{ArgMatches};
-use regex::Regex;
+use std::error;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
@@ -10,9 +10,9 @@ pub struct LabelFile {
 }
 
 pub fn create_label_file(file: &String) -> LabelFile {
-  LabelFile{
-    label_file: file.to_string()
-  }
+    LabelFile {
+        label_file: file.to_string(),
+    }
 }
 
 impl LabelFile {
@@ -23,8 +23,10 @@ impl LabelFile {
         let re = args.get_one::<String>("upc").unwrap();
         let upc_pat = Regex::new(re)?;
         let re = args.get_one::<String>("name").unwrap();
-        let name_pat = Regex::new(re)?;
-        let items = items_iter.filter(|x| { !x.deleted && upc_pat.is_match(&x.upc) && name_pat.is_match(&x.description)});
+        let name_pat = RegexBuilder::new(re).case_insensitive(true).build()?;
+        let items = items_iter.filter(|x| {
+            !x.deleted && upc_pat.is_match(&x.upc) && name_pat.is_match(&x.description)
+        });
 
         let mut workbook = Workbook::new();
         let bold_format = Format::new().set_bold();
@@ -39,19 +41,21 @@ impl LabelFile {
         let mut row: u32 = 1;
         for item in items {
             worksheet.write_string(row, 0, &item.description)?;
-            let plu = 
-                if item.plu.is_some() {
-                    item.plu.unwrap().parse::<u16>().unwrap()
-                } else {
-                    plu_assigned = plu_assigned + 1;
-                    plu_assigned
-                };
+            let plu = if item.plu.is_some() {
+                item.plu.unwrap().parse::<u16>().unwrap()
+            } else {
+                plu_assigned = plu_assigned + 1;
+                plu_assigned
+            };
             worksheet.write_string(row, 1, plu.to_string())?;
             worksheet.write_string(row, 2, &item.upc)?;
             worksheet.write_string(row, 3, format!("{:.2}", item.normal_price))?;
 
             row = row + 1;
-            println!("Writing: [{}] {} : {} : {}", plu, item.upc, item.description, item.normal_price);
+            println!(
+                "Writing: [{}] {} : {} : {}",
+                plu, item.upc, item.description, item.normal_price
+            );
         }
 
         workbook.save(&self.label_file)?;

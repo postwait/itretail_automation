@@ -617,6 +617,7 @@ dependencies = [
  "chrono",
  "clap",
  "home",
+ "regex",
  "reqwest",
  "rust_xlsxwriter",
  "serde",

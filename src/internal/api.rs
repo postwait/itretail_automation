@@ -1,7 +1,7 @@
 use home;
 use reqwest;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
@@ -24,7 +24,7 @@ pub struct ProductData {
     #[serde(rename = "departmentId")]
     pub department_id: i32,
     pub wicable: Option<i32>,
-    pub foodstamp: Option<bool>
+    pub foodstamp: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -133,7 +133,15 @@ impl ITRApi {
 
         println!("Fetching token");
         let client = reqwest::blocking::Client::new();
-        let user = env::var("ITRETAIL_USER").unwrap_or("auto@butchersofml.club".to_owned());
+        let user = match env::var("ITRETAIL_USER") {
+            Ok(p) => p,
+            Err(..) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "no username provided",
+                ))
+            }
+        };
         let pass = match env::var("ITRETAIL_PASS") {
             Ok(p) => p,
             Err(..) => {
@@ -191,7 +199,7 @@ impl ITRApi {
                 let text_response = result.text()?;
                 Ok(text_response)
             }
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         }
     }
 }

@@ -17,6 +17,10 @@ fn main() {
             .arg(Arg::new("output").long("output").short('o').action(ArgAction::Set).value_name("FILE").default_value("labels.xlsx"))
             .arg(Arg::new("upc").long("upc").action(ArgAction::Set).value_name("Regex").default_value("^00[^2]"))
             .arg(Arg::new("name").long("name").action(ArgAction::Set).value_name("Regex").default_value("."))
+        )
+        .subcommand(Command::new("mailchimp-sync")
+            .arg(Arg::new("mc_token").long("mc_token").action(ArgAction::Set).value_name("API_TOKEN"))
+            .arg(Arg::new("listid").long("listid").action(ArgAction::Set).value_name("LISTID"))
         );
     let help = cmd.render_help();
     let m = cmd.get_matches();
@@ -64,7 +68,7 @@ fn main() {
         Some(("scale-export", scmd)) => {
             let filename = scmd.get_one::<String>("output").unwrap();
             let mut scale_file = internal::cas::create_scale_file(filename);
-            let results = api.call(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
+            let results = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
             let r = scale_file.build_from_itretail_products(&results);
             if r.is_err() {
                 println!("{}", r.err().unwrap())
@@ -73,8 +77,14 @@ fn main() {
         Some(("label-export", scmd)) => {
             let filename = scmd.get_one::<String>("output").unwrap();
             let mut label_file = internal::label::create_label_file(filename);
-            let results = api.call(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
+            let results = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
             let r = label_file.build_from_itretail_products(&results, &scmd);
+            if r.is_err() {
+                println!("{}", r.err().unwrap())
+            }
+        },
+        Some(("mailchimp-sync", scmd)) => {
+            let r = internal::customer::mailchimp_sync(&mut api, &scmd);
             if r.is_err() {
                 println!("{}", r.err().unwrap())
             }

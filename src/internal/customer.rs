@@ -209,6 +209,7 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
             }
         }
     }    
+    println!("Added {} records to IT Retail.", added_to_itr);
     for itr_c in to_mc.iter() {
         let c = itr_customers.get(*itr_c).unwrap();
         let new_member = quick_new_member(&c.email, &c.first_name, &c.last_name, &c.phone);
@@ -220,8 +221,20 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
             }
         }
     }
-    println!("Added {} records to IT Retail.", added_to_itr);
     println!("Added {} records to Mailchimp.", added_to_mc);
+
+    for (mc_key, mc_c) in subscribers.iter() {
+        if let Some((_, itr_c)) = itr_customers.get_key_value(mc_key) {
+            let mc_first_name = mc_c.merge_fields.get("FNAME").unwrap().as_str().unwrap().to_string();
+            let mc_last_name = mc_c.merge_fields.get("LNAME").unwrap().as_str().unwrap().to_string();
+            let mc_phone = mc_c.merge_fields.get("PHONE").unwrap().as_str().unwrap().to_string();
+            if mc_first_name.ne(&itr_c.first_name) ||
+               mc_last_name.ne(&itr_c.last_name) ||
+               mc_phone.ne(&itr_c.phone) {
+                println!("{} records differ.", mc_key);
+            }
+        }
+    }
     if errors > 0 {
         return Err(anyhow!("There where {} syncing errors", errors))
     }

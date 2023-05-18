@@ -44,8 +44,10 @@ pub fn make_menu(output_file: &str, menu: &String, backdrop: Option<&String>, in
     let image_width: i32 = image.width().try_into().unwrap();
     let image_height: i32 = image.height().try_into().unwrap();
     let gutter = 220;
+    let title_outstep = 40;
     let footer = 80;
-    let mut y = 200;
+    let header = 100;
+    let mut y = header;
     let dot_w = {
         let (w, _) = text_size(scale, &font, &".".repeat(10));
         w / 10 
@@ -71,7 +73,7 @@ pub fn make_menu(output_file: &str, menu: &String, backdrop: Option<&String>, in
             draw_text_mut(&mut image, Rgba([120u8, 120u8, 120u8, 255u8]), image_width - gutter - price_w - dots_w, y, scale, &font, &dots_str);
             draw_text_mut(&mut image, Rgba([0u8, 0u8, 0u8, 255u8]), image_width - gutter - price_w, y, scale, &font, price);
         } else {
-            draw_text_mut(&mut image, Rgba([0u8, 0u8, 0u8, 255u8]), gutter, y, scale, &font, line);
+            draw_text_mut(&mut image, Rgba([0u8, 0u8, 0u8, 255u8]), gutter - title_outstep, y, scale, &font, line);
             let (w, h) = text_size(scale, &font, line);
             println!("Text size: {}x{}", w, h);
         }

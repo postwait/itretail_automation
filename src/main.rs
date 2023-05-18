@@ -1,7 +1,7 @@
 mod internal;
 
 use clap::{Command,Arg,ArgAction};
-use std::env;
+use std::{env, fs};
 
 fn main() {
     let mut cmd = Command::new("itretail_automation")
@@ -21,7 +21,13 @@ fn main() {
         .subcommand(Command::new("mailchimp-sync")
             .arg(Arg::new("mc_token").long("mc_token").action(ArgAction::Set).value_name("API_TOKEN"))
             .arg(Arg::new("listid").long("listid").action(ArgAction::Set).value_name("LISTID"))
-        );
+        )
+        .subcommand(Command::new("tvmenu")
+            .arg(Arg::new("backdrop").long("backdrop").action(ArgAction::Set).value_name("FILENAME"))
+            .arg(Arg::new("menu").long("menu").action(ArgAction::Set).value_name("FILENAME").default_value("menu.txt"))
+            .arg(Arg::new("output").long("output").action(ArgAction::Set).value_name("FILENAME").default_value("tvscreen.png"))
+            .arg(Arg::new("invert").long("invert").short('i').num_args(0).action(ArgAction::SetTrue))
+            .arg(Arg::new("pull").long("pull").short('u').num_args(0).action(ArgAction::SetTrue)));
     let help = cmd.render_help();
     let m = cmd.get_matches();
     
@@ -89,6 +95,19 @@ fn main() {
                 println!("{}", r.err().unwrap())
             }
         },
+        Some(("tvmenu", scmd)) => {
+            let menu_file = scmd.get_one::<String>("menu").unwrap();
+            if scmd.get_flag("pull") {
+                let results = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
+                internal::tvmenu::make_listing(menu_file, &results);
+            }
+            let menu_txt = fs::read_to_string(menu_file).expect("Could not open file.");
+            let r = internal::tvmenu::make_menu(scmd.get_one::<String>("output").unwrap(),
+                                                                   &menu_txt,
+                                                                   scmd.get_one::<String>("backdrop"),
+                                                                   scmd.get_flag("invert"));
+
+        }
         _ => {
             println!("{}", help)
         }

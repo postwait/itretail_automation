@@ -1,8 +1,7 @@
-use anyhow::{anyhow, Result};
-use image::{Rgb, Rgba, RgbImage};
+use anyhow::{Result};
+use image::{Rgba};
 use imageproc::drawing::{draw_text_mut, text_size};
 use rusttype::{Font, Scale};
-use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -18,9 +17,9 @@ pub fn make_listing(output_file: &str, json: &String) -> Result<()> {
     let weighed_items = items_iter.filter(|x| { !x.deleted && x.upc.starts_with("002") });
     let mut menu_file = OpenOptions::new().write(true).create(true).truncate(true).open(output_file).expect("Could not open menu file");
     for item in weighed_items {
-       menu_file.write(&format!("{} = ${:.2}/lb\r\n", item.description, item.normal_price).as_bytes());
+       menu_file.write(&format!("{} = ${:.2}/lb\r\n", item.description, item.normal_price).as_bytes()).expect("writing menu item");
     }
-    menu_file.sync_all();
+    menu_file.sync_all().expect("saving menu file");
     Ok(())
 }
 pub fn make_menu(output_file: &str, menu: &String, backdrop: Option<&String>, invert: bool) -> Result<()> {

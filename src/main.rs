@@ -99,14 +99,19 @@ fn main() {
             let menu_file = scmd.get_one::<String>("menu").unwrap();
             if scmd.get_flag("pull") {
                 let results = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
-                internal::tvmenu::make_listing(menu_file, &results);
+                let r = internal::tvmenu::make_listing(menu_file, &results);
+                if r.is_err() {
+                    println!("Error constructing menu from IT Retail: {}", r.err().unwrap());
+                }
             }
             let menu_txt = fs::read_to_string(menu_file).expect("Could not open file.");
             let r = internal::tvmenu::make_menu(scmd.get_one::<String>("output").unwrap(),
                                                                    &menu_txt,
                                                                    scmd.get_one::<String>("backdrop"),
                                                                    scmd.get_flag("invert"));
-
+            if r.is_err() {
+                println!("Error creating TV menu image: {}", r.err().unwrap());
+            }
         }
         _ => {
             println!("{}", help)

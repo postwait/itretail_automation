@@ -45,7 +45,10 @@ impl ScaleFile {
         for item in weighed_items {
             worksheet.write_number(row, 0, item.department_id)?;
             let plu = 
-                if item.plu.is_some() {
+                if item.cert_code.is_some() {
+                    item.cert_code.unwrap().parse::<u16>().unwrap()
+                }
+                else if item.plu.is_some() {
                     item.plu.unwrap().parse::<u16>().unwrap()
                 } else {
                     plu_assigned = plu_assigned + 1;

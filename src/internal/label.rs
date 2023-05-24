@@ -1,5 +1,5 @@
 use clap::ArgMatches;
-use regex::{Regex, RegexBuilder};
+use fancy_regex::{Regex, RegexBuilder};
 use rust_xlsxwriter::{Format, Workbook};
 use std::error;
 
@@ -23,9 +23,9 @@ impl LabelFile {
         let re = args.get_one::<String>("upc").unwrap();
         let upc_pat = Regex::new(re)?;
         let re = args.get_one::<String>("name").unwrap();
-        let name_pat = RegexBuilder::new(re).case_insensitive(true).build()?;
+        let name_pat = RegexBuilder::new(re).build()?;
         let items = items_iter.filter(|x| {
-            !x.deleted && upc_pat.is_match(&x.upc) && name_pat.is_match(&x.description)
+            !x.deleted && upc_pat.is_match(&x.upc).unwrap() && name_pat.is_match(&x.description).unwrap()
         });
 
         let mut workbook = Workbook::new();

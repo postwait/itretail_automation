@@ -23,6 +23,8 @@ pub struct MinimalCustomer {
     pub email: String,
     #[serde(rename = "Phone")]
     pub phone: String,
+    #[serde(rename = "FrequentShopper")]
+    pub frequent_shopper: bool,
 }
 #[derive(Deserialize, Debug)]
 pub struct Customer {

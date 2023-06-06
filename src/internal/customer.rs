@@ -199,7 +199,8 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
             first_name: nc.merge_fields.get("FNAME").unwrap().as_str().unwrap().to_string(),
             last_name: nc.merge_fields.get("LNAME").unwrap().as_str().unwrap().to_string(),
             email: nc.email_address.to_string(),
-            phone: nc.merge_fields.get("PHONE").unwrap().as_str().unwrap().to_string()
+            phone: nc.merge_fields.get("PHONE").unwrap().as_str().unwrap().to_string(),
+            frequent_shopper: true
         };
         match api.make_customer(&min_itr) {
             Ok(_) => { added_to_itr = added_to_itr + 1; }
@@ -231,7 +232,7 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
             if mc_first_name.ne(&itr_c.first_name) ||
                mc_last_name.ne(&itr_c.last_name) ||
                mc_phone.ne(&itr_c.phone) {
-                println!("{} records differ.", mc_key);
+                println!("{} records differi ({} : {}).", mc_key, mc_phone, itr_c.phone);
             }
         }
     }

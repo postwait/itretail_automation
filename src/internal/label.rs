@@ -24,8 +24,10 @@ impl LabelFile {
         let upc_pat = Regex::new(re)?;
         let re = args.get_one::<String>("name").unwrap();
         let name_pat = RegexBuilder::new(re).build()?;
+        let vendor_id = args.get_one::<String>("vendor").unwrap().parse::<i32>().unwrap_or(0);
         let items = items_iter.filter(|x| {
-            !x.deleted && upc_pat.is_match(&x.upc).unwrap() && name_pat.is_match(&x.description).unwrap()
+            !x.deleted && upc_pat.is_match(&x.upc).unwrap() && name_pat.is_match(&x.description).unwrap() &&
+            (vendor_id == 0 || (x.vendor_id.is_some() && vendor_id == x.vendor_id.unwrap()))
         });
 
         let mut workbook = Workbook::new();

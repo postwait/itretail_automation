@@ -17,6 +17,7 @@ fn main() {
             .arg(Arg::new("output").long("output").short('o').action(ArgAction::Set).value_name("FILE").default_value("labels.xlsx"))
             .arg(Arg::new("upc").long("upc").action(ArgAction::Set).value_name("Regex").default_value("^(?!002)"))
             .arg(Arg::new("name").long("name").action(ArgAction::Set).value_name("Regex").default_value("."))
+            .arg(Arg::new("vendor").long("vendor").action(ArgAction::Set).value_name("Number").default_value("0"))
         )
         .subcommand(Command::new("mailchimp-sync")
             .arg(Arg::new("mc_token").long("mc_token").action(ArgAction::Set).value_name("API_TOKEN"))

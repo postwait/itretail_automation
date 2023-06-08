@@ -72,6 +72,8 @@ pub struct ProductData {
     #[serde(rename = "PLU")]
     pub plu: Option<String>,
     pub cert_code: Option<String>,
+    #[serde(rename = "vendorId")]
+    pub vendor_id: Option<i32>,
     #[serde(rename = "departmentId")]
     pub department_id: i32,
     pub wicable: Option<i32>,

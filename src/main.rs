@@ -93,7 +93,7 @@ fn main() {
         Some(("mailchimp-sync", scmd)) => {
             let r = internal::customer::mailchimp_sync(&mut api, &scmd);
             if r.is_err() {
-                println!("{}", r.err().unwrap())
+                println!("{:?}", r.err().unwrap())
             }
         },
         Some(("tvmenu", scmd)) => {

@@ -39,13 +39,13 @@ pub struct Customer {
     #[serde(rename = "BirthDate")]
     pub birth_date: Option<String>,
     #[serde(rename = "Phone")]
-    pub phone: String,
+    pub phone: Option<String>,
     #[serde(rename = "Discount")]
     pub discount: Option<u8>,
     #[serde(rename = "Deleted")]
     pub deleted: bool,
     #[serde(rename = "Email")]
-    pub email: String,
+    pub email: Option<String>,
     #[serde(rename = "Balance")]
     pub balance: Option<f64>,
     #[serde(rename = "BalanceLimit")]

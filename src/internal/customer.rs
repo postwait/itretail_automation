@@ -4,6 +4,7 @@ use reqwest;
 use std::env;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use regex::Regex;
 use serde_json::json;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -60,6 +61,18 @@ pub fn quick_new_member(email: &String, first_name: &String, last_name: &String,
         email_type: "html".to_owned(),
         merge_fields: merge_fields
     }
+}
+
+pub fn normalize_phone(phone: &String) -> String {
+    let re = Regex::new("[^0-9]+").unwrap();
+    let mut shorter = re.replace_all(phone, "").to_string();
+    if shorter.starts_with("1") {
+        shorter = shorter[1..].to_string();
+    }
+    if shorter.len() > 10 {
+        shorter = shorter[0..9].to_string();
+    }
+    shorter
 }
 
 pub struct MCApi {
@@ -179,7 +192,10 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
     let mut itr_customers = HashMap::new();
     let itc_vec: Vec<super::api::Customer> = api.get_customers()?;
     for customer in itc_vec {
-        itr_customers.insert(customer.email.to_lowercase(), customer);
+        if customer.email.is_some() {
+            let email = customer.email.as_ref().unwrap().to_lowercase();
+            itr_customers.insert(email, customer);
+        }
     }
     let mc_token =args.get_one::<String>("mc_token");
     let mut mc_api = mailchimp_api_new(mc_token);
@@ -199,13 +215,13 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
             first_name: nc.merge_fields.get("FNAME").unwrap().as_str().unwrap().to_string(),
             last_name: nc.merge_fields.get("LNAME").unwrap().as_str().unwrap().to_string(),
             email: nc.email_address.to_string(),
-            phone: nc.merge_fields.get("PHONE").unwrap().as_str().unwrap().to_string(),
+            phone: normalize_phone(&nc.merge_fields.get("PHONE").unwrap().as_str().unwrap().to_string()),
             frequent_shopper: true
         };
         match api.make_customer(&min_itr) {
             Ok(_) => { added_to_itr = added_to_itr + 1; }
             Err(e) => {
-                println!("ERR: {}", e);
+                println!("ERR adding to ITRetail: {} for {:?}", e, &min_itr);
                 errors = errors + 1;
             }
         }
@@ -213,11 +229,15 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
     println!("Added {} records to IT Retail.", added_to_itr);
     for itr_c in to_mc.iter() {
         let c = itr_customers.get(*itr_c).unwrap();
-        let new_member = quick_new_member(&c.email, &c.first_name, &c.last_name, &c.phone);
+        let c_phone = match &c.phone {
+            Some(phone) => phone.to_string(),
+            _ => "".to_owned()
+        };
+        let new_member = quick_new_member(&c.email.as_ref().unwrap().to_string(), &c.first_name, &c.last_name, &c_phone);
         match mc_api.post_json(&format!("/lists/{}/members", &list.id), &new_member) {
             Ok(_) => { added_to_mc = added_to_mc + 1; }
             Err(e) => {
-                println!("ERR: {}", e);
+                println!("ERR adding to mailchimp: {} for {:?}", e, &new_member);
                 errors = errors + 1;
             }
         }
@@ -229,10 +249,14 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
             let mc_first_name = mc_c.merge_fields.get("FNAME").unwrap().as_str().unwrap().to_string();
             let mc_last_name = mc_c.merge_fields.get("LNAME").unwrap().as_str().unwrap().to_string();
             let mc_phone = mc_c.merge_fields.get("PHONE").unwrap().as_str().unwrap().to_string();
+            let c_phone = match &itr_c.phone {
+                Some(phone) => phone.to_string(),
+                _ => "".to_owned()
+            };
             if mc_first_name.ne(&itr_c.first_name) ||
                mc_last_name.ne(&itr_c.last_name) ||
-               mc_phone.ne(&itr_c.phone) {
-                println!("{} records differi ({} : {}).", mc_key, mc_phone, itr_c.phone);
+               mc_phone.ne(&c_phone) {
+                println!("{} records differ ({:?} : {:?}).", mc_key, mc_c, itr_c);
             }
         }
     }

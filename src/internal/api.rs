@@ -1,5 +1,6 @@
 use home;
 use reqwest;
+use reqwest::blocking::multipart;
 use reqwest::header::CONTENT_TYPE;
 use anyhow::{anyhow, Result};
 
@@ -10,6 +11,10 @@ use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+pub struct PLUAssignment {
+    pub upc: String,
+    pub plu: u16
+}
 #[derive(Serialize)]
 struct Empty {
 }
@@ -76,6 +81,8 @@ pub struct ProductData {
     pub vendor_id: Option<i32>,
     #[serde(rename = "departmentId")]
     pub department_id: i32,
+    #[serde(rename = "sectionId")]
+    pub section_id: Option<i32>,
     pub wicable: Option<i32>,
     pub foodstamp: Option<bool>,
 }
@@ -251,6 +258,43 @@ impl ITRApi {
             }
             Err(e) => Err(anyhow!("{}", e.to_string()))
         }
+    }
+
+    pub fn call_multi<T: Serialize + ?Sized>(&mut self, method: reqwest::Method, endpoint: &String, headers: Option<reqwest::header::HeaderMap>, form: multipart::Form) -> Result<String> {
+        let client = reqwest::blocking::Client::new();
+        let url = "https://retailnext.itretail.com".to_owned() + endpoint;
+        let mut builder = client
+            .request(method, url);
+        if let Some(headers) = headers {
+            builder = builder.headers(headers)
+        }
+        builder = builder.multipart(form);
+        builder = builder.bearer_auth(self.bearer_token.access_token.to_string());
+        let res = builder.send();
+        match res {
+            Ok(result) => {
+                if result.status().is_success() {
+                    let text_response = result.text()?;
+                    Ok(text_response)
+                }  else {
+                    Err(anyhow!("{}", result.status().canonical_reason().unwrap_or(&format!("UNKNOWN CODE: {}", result.status().as_str()))))
+                }
+            }
+            Err(e) => Err(anyhow!("{}", e.to_string()))
+        }
+    }
+
+    pub fn set_plu(&mut self, plus: Vec<PLUAssignment>) -> Result<String> {
+        let endpoint = &"/api/ProductsData/UpdateOnly".to_string();
+        let mut csvcontents = "UPC,PLU\r\n".to_string();
+        csvcontents.push_str(&plus.iter().map(|ass| format!("{},{}\r\n", ass.upc, ass.plu)).collect::<String>());
+        let part = reqwest::blocking::multipart::Part::text(csvcontents).file_name("plu.csv").mime_str("text/plain")?;
+        let form = reqwest::blocking::multipart::Form::new();
+        let form = form.part("1", part);
+        let form = form.text("2", "[\"upc\",\"PLU\"]")
+            .text("3", "false")
+            .text("5[0]", "198dd573-ca6e-435a-b779-98922ad0185a");
+        self.call_multi::<Empty>(reqwest::Method::POST, endpoint, None, form)
     }
 
     pub fn post_json<T: Serialize + ?Sized>(&mut self, endpoint: &String, json: &T) -> Result<String> {

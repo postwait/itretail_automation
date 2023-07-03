@@ -12,6 +12,8 @@ fn main() {
         .arg(Arg::new("password").long("password").short('p'))
         .subcommand(Command::new("scale-export")
             .arg(Arg::new("output").long("output").short('o').action(ArgAction::Set).value_name("FILE").default_value("scale.xlsx"))
+            .arg(Arg::new("internal").long("internal").num_args(0).action(ArgAction::SetTrue))
+            .arg(Arg::new("upc").long("upc").action(ArgAction::Set).value_name("Regex").default_value("^002"))
         )
         .subcommand(Command::new("label-export")
             .arg(Arg::new("output").long("output").short('o').action(ArgAction::Set).value_name("FILE").default_value("labels.xlsx"))
@@ -75,8 +77,7 @@ fn main() {
         Some(("scale-export", scmd)) => {
             let filename = scmd.get_one::<String>("output").unwrap();
             let mut scale_file = internal::cas::create_scale_file(filename);
-            let results = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
-            let r = scale_file.build_from_itretail_products(&results);
+            let r = scale_file.build_from_itretail_products(&mut api, &scmd);
             if r.is_err() {
                 println!("{}", r.err().unwrap())
             }

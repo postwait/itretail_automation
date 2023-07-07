@@ -10,6 +10,10 @@ fn main() {
         .about("Automates certain tasks against IT Retail")
         .arg(Arg::new("username").long("username").short('u'))
         .arg(Arg::new("password").long("password").short('p'))
+        .subcommand(Command::new("set-plu")
+            .arg(Arg::new("upc").required(true))
+            .arg(Arg::new("plu").required(true))
+        )
         .subcommand(Command::new("scale-export")
             .arg(Arg::new("output").long("output").short('o').action(ArgAction::Set).value_name("FILE").default_value("scale.xlsx"))
             .arg(Arg::new("internal").long("internal").num_args(0).action(ArgAction::SetTrue))
@@ -113,6 +117,20 @@ fn main() {
                                                                    scmd.get_flag("invert"));
             if r.is_err() {
                 println!("Error creating TV menu image: {}", r.err().unwrap());
+            }
+        }
+        Some(("set-plu", scmd)) => {
+            let upc = scmd.get_one::<String>("upc");
+            let plus = scmd.get_one::<String>("plu");
+            if upc.is_none() || upc.unwrap().len() != 13 || plus.is_none() || plus.unwrap().len() != 4 {
+                println!("Error, upc {:?} (should be 13 digits) or plu {:?} (should be 4 digits) invalid", upc, plus);
+            } else {
+                let plu = u16::from_str_radix(plus.unwrap(), 10).ok().unwrap();
+                let plu_assignment = internal::api::PLUAssignment { upc: upc.unwrap().to_string(), plu: plu };
+                let r = api.set_plu(vec!(plu_assignment));
+                if r.is_err() {
+                    println!("Error setting PLU: {}", r.err().unwrap())
+                }
             }
         }
         _ => {

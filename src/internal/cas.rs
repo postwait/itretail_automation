@@ -127,7 +127,7 @@ impl ScaleFile {
                 println!("Bad UPC: {}", item.upc);
                 continue;
             }
-            let itemcode = itemcode_str.unwrap().trim_start_matches('0').parse::<u32>()?;
+            let itemcode = itemcode_str.unwrap().trim_start_matches('0').parse::<u32>().or::<u32>(Ok(0)).unwrap();
             
 
             worksheet.write_number(row, 4, itemcode)?;

@@ -83,7 +83,7 @@ fn main() {
             let mut scale_file = internal::cas::create_scale_file(filename);
             let r = scale_file.build_from_itretail_products(&mut api, &scmd);
             if r.is_err() {
-                println!("{}", r.err().unwrap())
+                println!("Error: {}", r.err().unwrap())
             }
         },
         Some(("label-export", scmd)) => {

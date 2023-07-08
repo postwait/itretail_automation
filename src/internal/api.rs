@@ -294,7 +294,8 @@ impl ITRApi {
         let form = form.text("2", "[\"upc\",\"PLU\"]")
             .text("3", "false")
             .text("5[0]", "198dd573-ca6e-435a-b779-98922ad0185a");
-        self.call_multi::<Empty>(reqwest::Method::POST, endpoint, None, form)
+        let r = self.call_multi::<Empty>(reqwest::Method::POST, endpoint, None, form);
+        r
     }
 
     pub fn post_json<T: Serialize + ?Sized>(&mut self, endpoint: &String, json: &T) -> Result<String> {

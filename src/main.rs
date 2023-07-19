@@ -19,6 +19,7 @@ fn main() {
             .arg(Arg::new("internal").long("internal").num_args(0).action(ArgAction::SetTrue))
             .arg(Arg::new("upc").long("upc").action(ArgAction::Set).value_name("Regex").default_value("^002"))
             .arg(Arg::new("scale").long("scale").action(ArgAction::Append).value_name("IP Address"))
+            .arg(Arg::new("preserve").long("preserve").num_args(0).action(ArgAction::SetTrue))
         )
         .subcommand(Command::new("label-export")
             .arg(Arg::new("output").long("output").short('o').action(ArgAction::Set).value_name("FILE").default_value("labels.xlsx"))
@@ -80,8 +81,7 @@ fn main() {
 
     match m.subcommand() {
         Some(("scale-export", scmd)) => {
-            let filename = scmd.get_one::<String>("output").unwrap();
-            let mut scale_file = internal::cas::create_scale_file(filename);
+            let mut scale_file = internal::cas::Scales{};
             let r = scale_file.send(&mut api, &scmd);
             if r.is_err() {
                 println!("Error: {}", r.err().unwrap())

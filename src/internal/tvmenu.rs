@@ -6,6 +6,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use lazy_static::lazy_static;
+use log::*;
 
 lazy_static! {
     static ref DEFAULT_BACKDROP: image::ImageBuffer<Rgba<u8>, Vec<u8>> = image::load_from_memory(include_bytes!("../assets/backdrop.png")).unwrap().into_rgba8();
@@ -63,7 +64,7 @@ pub fn make_menu(output_file: &str, menu: &String, backdrop: Option<&String>, in
 
             let dot_count: i32 = (room / dot_w).try_into().unwrap();
             if dot_count < 0 {
-                println!("Line too long: {} ... {}", name, price);
+                warn!("Line too long: {} ... {}", name, price);
                 continue;
             }
             let dots_str = ".".repeat(dot_count as usize);
@@ -74,7 +75,7 @@ pub fn make_menu(output_file: &str, menu: &String, backdrop: Option<&String>, in
         } else {
             draw_text_mut(&mut image, Rgba([0u8, 0u8, 0u8, 255u8]), gutter - title_outstep, y, scale, &font, line);
             let (w, h) = text_size(scale, &font, line);
-            println!("Text size: {}x{}", w, h);
+            debug!("Text size: {}x{}", w, h);
         }
         y = y + (height as i32);
     }

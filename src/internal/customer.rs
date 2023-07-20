@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use regex::Regex;
 use serde_json::json;
+use log::*;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Tag {
@@ -89,7 +90,7 @@ pub fn mailchimp_api_new(token: Option<&String>) -> MCApi {
                 match env::var("MAILCHIMP_API_TOKEN") {
                     Ok(tok) => tok,
                     Err(_) => {
-                        println!("No Mailchimp API token, this will not work well.");
+                        error!("No Mailchimp API token, this will not work well.");
                         "".to_string()
                     }
                 }
@@ -221,12 +222,12 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
         match api.make_customer(&min_itr) {
             Ok(_) => { added_to_itr = added_to_itr + 1; }
             Err(e) => {
-                println!("ERR adding to ITRetail: {} for {:?}", e, &min_itr);
+                warn!("failed adding to ITRetail: {} for {:?}", e, &min_itr);
                 errors = errors + 1;
             }
         }
     }    
-    println!("Added {} records to IT Retail.", added_to_itr);
+    info!("Added {} records to IT Retail.", added_to_itr);
     for itr_c in to_mc.iter() {
         let c = itr_customers.get(*itr_c).unwrap();
         let c_phone = match &c.phone {
@@ -237,12 +238,12 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
         match mc_api.post_json(&format!("/lists/{}/members", &list.id), &new_member) {
             Ok(_) => { added_to_mc = added_to_mc + 1; }
             Err(e) => {
-                println!("ERR adding to mailchimp: {} for {:?}", e, &new_member);
+                warn!("failed adding to mailchimp: {} for {:?}", e, &new_member);
                 errors = errors + 1;
             }
         }
     }
-    println!("Added {} records to Mailchimp.", added_to_mc);
+    info!("Added {} records to Mailchimp.", added_to_mc);
 
     for (mc_key, mc_c) in subscribers.iter() {
         if let Some((_, itr_c)) = itr_customers.get_key_value(mc_key) {
@@ -256,7 +257,7 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
             if mc_first_name.ne(&itr_c.first_name) ||
                mc_last_name.ne(&itr_c.last_name) ||
                mc_phone.ne(&c_phone) {
-                println!("{} records differ ({:?} : {:?}).", mc_key, mc_c, itr_c);
+                debug!("{} records differ ({:?} : {:?}).", mc_key, mc_c, itr_c);
             }
         }
     }

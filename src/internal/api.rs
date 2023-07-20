@@ -3,6 +3,7 @@ use reqwest;
 use reqwest::blocking::multipart;
 use reqwest::header::CONTENT_TYPE;
 use anyhow::{anyhow, Result};
+use log::*;
 
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -128,7 +129,7 @@ fn bearer_token_from_json(json: String) -> BearerToken {
         }
         Err(err) => {
             if json.len() > 0 {
-                println!("Error reading json: {}\nJSON: {}", err, json);
+                warn!("Error reading json: {}\nJSON: {}", err, json);
             }
             return BearerToken::default();
         }
@@ -136,7 +137,7 @@ fn bearer_token_from_json(json: String) -> BearerToken {
     bto
 }
 
-pub fn create_api() -> Result<ITRApi> {
+pub fn get_dotfile(filename: &str, writeable: bool) -> Result<File,anyhow::Error> {
     let mut token_filepath = PathBuf::new();
     match home::home_dir() {
         Some(path) => token_filepath.push(path),
@@ -151,20 +152,27 @@ pub fn create_api() -> Result<ITRApi> {
             Err(err) => return Err(err.into()),
         }
     }
-    token_filepath.push("token.json");
-    let backingfile = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(token_filepath);
-    if backingfile.is_err() {
-        return Err(backingfile.err().unwrap().into());
+    token_filepath.push(filename);
+    let file =
+    if writeable {
+        OpenOptions::new().read(true).write(true).create(true).open(token_filepath)
+    } else {
+        OpenOptions::new().read(true).create(true).open(token_filepath)
+    };
+    match file {
+        Ok(f) => Ok(f),
+        Err(err) => Err(err.into())
     }
+}
+
+pub fn create_api() -> Result<ITRApi> {
+    let backingfile = get_dotfile("token.json", true)?;
     Ok(ITRApi {
-        backingfile: backingfile.ok().unwrap(),
+        backingfile: backingfile,
         bearer_token: BearerToken::default(),
     })
 }
+
 impl ITRApi {
     fn clear_token(&mut self) -> Result<()> {
         self.backingfile.set_len(0)?;
@@ -182,13 +190,13 @@ impl ITRApi {
             Err(..) => u64::MAX,
         };
         if self.bearer_token.expires_at.unwrap_or(0) > now {
-            println!("Using stored token");
+            info!("Using stored token");
             return Ok(());
         }
 
         self.clear_token()?;
 
-        println!("Fetching token");
+        debug!("Fetching token");
         let client = reqwest::blocking::Client::new();
         let user = match env::var("ITRETAIL_USER") {
             Ok(p) => p,

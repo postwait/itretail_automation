@@ -2,6 +2,7 @@ use clap::ArgMatches;
 use fancy_regex::{Regex, RegexBuilder};
 use rust_xlsxwriter::{Format, Workbook};
 use std::error;
+use log::*;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
@@ -54,7 +55,7 @@ impl LabelFile {
             worksheet.write_string(row, 3, format!("{:.2}", item.normal_price))?;
 
             row = row + 1;
-            println!(
+            info!(
                 "Writing: [{}] {} : {} : {}",
                 plu, item.upc, item.description, item.normal_price
             );

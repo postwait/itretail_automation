@@ -2,7 +2,7 @@ use anyhow::{anyhow,Result};
 use std::collections::{HashMap,HashSet};
 use std::path::{Path,PathBuf};
 use std::ffi::{CStr, CString};
-use std::{thread,time};
+use std::{thread,time,io::{self,Write}};
 use clap::ArgMatches;
 use fancy_regex::Regex;
 use rust_xlsxwriter::{Format, Workbook};
@@ -14,11 +14,11 @@ use process_path::get_executable_path;
 use cty;
 use lazy_static::lazy_static;
 use std::sync::{Arc,Mutex};
+use log::*;
 
 use super::api::{PLUAssignment, ProductData};
 
-type LPSTR = * const cty::c_uchar;
-//type MUTLPSTR = * mut cty::c_uchar;
+type LPSTR = * const cty::c_char;
 type WORD = u16;
 type DWORD = u32;
 type BYTE = u8;
@@ -29,18 +29,21 @@ const TD_LIB_ADDINTERPRETER: &[u8; 15] = b"AddInterpreter\0";
 const TD_LIB_ADDCONNECTIONEX: &[u8; 16] = b"AddConnectionEx\0";
 const TD_LIB_CONNECT: &[u8; 8] = b"Connect\0";
 const TD_LIB_DISCONNECT: &[u8; 11] = b"Disconnect\0";
+const TD_LIB_SETTIMEOUT: &[u8; 11] = b"SetTimeout\0";
 const TD_LIB_SENDDATAEX: &[u8; 11] = b"SendDataEx\0";
 
 #[repr(u16)]
-#[derive(Debug)]
+#[derive(Debug,PartialEq,Copy,Clone)]
 #[allow(dead_code)]
-enum DfAction {
-   GETINFO = 1,
-   DOWNLOAD = 3,
-   DELETE = 4,
-   DELETEALL = 5,
-   COMPLETE = 23,
-   NOTIFY = 27,
+pub enum DfAction {
+    NOTHING = 0,
+    GETINFO = 1,
+    DOWNLOAD = 3,
+    DELETE = 4,
+    DELETEALL = 5,
+    PING = 22,
+    COMPLETE = 23,
+    NOTIFY = 27,
 }
 impl From<DfAction> for u8 {
     fn from(item: DfAction) -> Self {
@@ -58,8 +61,9 @@ const DF_COMMTYPE_TCPIP: u8 = 1;
 #[derive(Debug)]
 #[allow(dead_code,non_camel_case_types,non_snake_case)]
 enum DfData {
-    CUSTOM = 27,
+    PING = 7,
     PLU = 10,
+    CUSTOM = 27,
     PLU_V06 = 98
 }
 impl From<DfData> for u8 {
@@ -170,6 +174,23 @@ pub struct TD_ST_TRANSDATA_V01 {
     wdAction: DfAction,
     wdDataSize: WORD,
     pData: * mut cty::c_void,
+}
+
+#[repr(C)]
+#[allow(non_camel_case_types,non_snake_case)]
+#[derive(Debug)]
+pub struct TD_ST_PINGINFO {
+    nComplete: i32,
+    nLoop: i32,
+    nBytes: i32,
+    nTime: i32,
+    nTTL: i32,
+    strIp: [i8; 41],
+}
+impl Default for TD_ST_PINGINFO {
+    fn default() -> TD_ST_PINGINFO {
+        TD_ST_PINGINFO { nComplete: 0, nLoop: 1, nBytes: 1, nTime: 1, nTTL: 255, strIp: [0; 41] }
+    }
 }
 
 #[repr(C)]
@@ -331,6 +352,7 @@ impl Default for TD_ST_PLU_V06 {
         }
     }
 }
+
 fn jam(string: &String, out: &mut [i8]) {
     let bs = string.as_bytes();
     let bsr = bs.as_ptr() as *const i8;
@@ -347,10 +369,12 @@ impl From<&ProductData> for TD_ST_PLU_V06 {
         let itemcode = itemcode_str.trim_start_matches('0').parse::<u32>().or::<u32>(Ok(0)).unwrap();
         cp.dwItemCode = itemcode;
         cp.dwUnitPrice = (p.normal_price * 100.0) as u32;
+        cp.btWeightUnit = 1; // by 1 lb
+        cp.wdLabel1 = STANDARD_LABEL_ID;
         if p.second_description.is_some() {
             let ingredients = p.second_description.as_ref().unwrap();
             if ingredients.len() > 0 {
-                cp.wdLabel1 = INGREDIENT_LABEL_ID;
+                cp.wdLabel1 = INGREDIENT_LABEL_ID; // butcher's club specific
                 jam(&ingredients, &mut cp.chDirectIngredient);
             }
         }
@@ -359,10 +383,11 @@ impl From<&ProductData> for TD_ST_PLU_V06 {
     }
 }
 
-type FnSetCommLibrary = Symbol<unsafe extern fn(i32, LPSTR) -> i32>;
+type FnSetCommLibrary = Symbol<unsafe extern fn(i32, LPSTR, i32) -> i32>;
 type FnAddInterpreter = Symbol<unsafe extern fn(WORD, WORD, LPSTR) -> i32>;
 type FnAddConnectionEx = Symbol<unsafe extern fn(TD_ST_CONNECTION_V02) -> i32>;
-type FnConnect = Symbol<unsafe extern fn(LPSTR, cty::c_short) -> i32>;
+type FnScale = Symbol<unsafe extern fn(LPSTR, cty::c_short) -> i32>;
+type FnScaleInt = Symbol<unsafe extern fn(LPSTR, cty::c_short, i32) -> i32>;
 type FnSendDataEx = Symbol<unsafe extern fn(TD_ST_TRANSDATA_V02) -> i32>;
 
 #[derive(Debug)]
@@ -370,10 +395,13 @@ pub struct Scale {
     ip: String,
     idx: i16,
     state: DfState,
+    last_send_action: DfAction,
+    last_recv_action: DfAction,
     should_delete: bool,
+    delete_completed: bool,
+    plus_downloaded: u32,
     product_idx: u32,
     products: Arc<Vec<ProductData>>,
-    complete: bool,
     notified: bool
 }
 
@@ -383,24 +411,43 @@ impl Scale {
             ip,
             idx: -1,
             state: DfState::DISCONNECT,
+            last_send_action: DfAction::NOTHING,
+            last_recv_action: DfAction::NOTHING,
             should_delete: true,
+            delete_completed: false,
+            plus_downloaded: 0,
             product_idx: 0,
             products: Arc::new(vec![]),
-            complete: false,
             notified: false
+        }
+    }
+    pub fn complete(&self) -> bool {
+        (self.plus_downloaded as usize == self.products.len()) &&
+        (self.should_delete == self.delete_completed)
+    }
+    pub fn status_str(&self) -> String {
+        if self.complete() {
+            format!("{} [complete]", self.ip)
+        } else if self.should_delete && !self.delete_completed {
+            format!("{} [deleting]", self.ip)
+        } else {
+            let pcomplete = 100.0 * (self.plus_downloaded as f32 / self.products.len() as f32);
+            format!("{} [{:7.2}%]", self.ip, pcomplete)
         }
     }
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ScaleAPI {
     lib_prtc: Library,
     scales: HashMap<String, Arc<Mutex<Scale>>>,
     cas_set_comm_library: FnSetCommLibrary,
     cas_add_interpreter: FnAddInterpreter,
     cas_add_connection_ex: FnAddConnectionEx,
-    cas_connect: FnConnect,
-    cas_disconnect: FnConnect, // same prototype
+    cas_connect: FnScale,
+    cas_disconnect: FnScale,
+    cas_set_timeout: FnScaleInt,
     cas_senddata_ex: FnSendDataEx,
 }
 
@@ -418,8 +465,6 @@ pub fn get_lib(dll: &str) -> Result<(Library, PathBuf), libloading::Error> {
     let lib = unsafe { Library::new(dllpath.as_path()) };
     if lib.is_ok() {
         return Ok((lib.unwrap(), dllpath))
-    } else {
-        println!("Error: {:?}", lib.as_ref().err())
     }
     return Err(lib.err().unwrap());
 }
@@ -427,7 +472,7 @@ pub fn get_lib(dll: &str) -> Result<(Library, PathBuf), libloading::Error> {
 fn cas_api_init() -> ScaleAPI {
     let casprtc = get_lib("CASPRTC.dll");
     if casprtc.is_err() {
-        println!("Error: {:?}", casprtc.as_ref().err());
+        error!("Error: {:?}", casprtc.as_ref().err());
         panic!("Cannot continue without CAS support. (DLLs missing?)");
     }
     let (casprtc_lib, casprtc_path) = casprtc.unwrap();
@@ -435,8 +480,9 @@ fn cas_api_init() -> ScaleAPI {
         let set_comm_library: FnSetCommLibrary = casprtc_lib.get(TD_LIB_SETCOMMLIB).unwrap();
         let add_interpreter: FnAddInterpreter = casprtc_lib.get(TD_LIB_ADDINTERPRETER).unwrap();
         let add_connection_ex: FnAddConnectionEx = casprtc_lib.get(TD_LIB_ADDCONNECTIONEX).unwrap();
-        let connect: FnConnect = casprtc_lib.get(TD_LIB_CONNECT).unwrap();
-        let disconnect: FnConnect = casprtc_lib.get(TD_LIB_DISCONNECT).unwrap();
+        let connect: FnScale = casprtc_lib.get(TD_LIB_CONNECT).unwrap();
+        let disconnect: FnScale = casprtc_lib.get(TD_LIB_DISCONNECT).unwrap();
+        let set_timeout: FnScaleInt = casprtc_lib.get(TD_LIB_SETTIMEOUT).unwrap();
         let senddata_ex: FnSendDataEx = casprtc_lib.get(TD_LIB_SENDDATAEX).unwrap();
         
         let sf = ScaleAPI{
@@ -446,26 +492,23 @@ fn cas_api_init() -> ScaleAPI {
             cas_add_connection_ex: add_connection_ex,
             cas_connect: connect,
             cas_disconnect: disconnect,
+            cas_set_timeout: set_timeout,
             cas_senddata_ex: senddata_ex,
             scales: HashMap::new()
         };
         let init: Symbol<extern "C" fn (i32) -> i32> = sf.lib_prtc.get(b"Initialize\0").unwrap();
         let rc = init(0);
-        println!("CASPRTC init -> {}", rc);
+        debug!("CASPRTC init -> {}", rc);
 
         let mut dll = PathBuf::from(casprtc_path.parent().unwrap());
         dll.push("CASTCPIP.dll");
         let dll_str = dll.as_path().as_os_str().to_string_lossy();
-        for _ in 1..5 {
-          let ret = (sf.cas_set_comm_library)(DF_MODULE_TCPIP, dll_str.as_bytes().as_ptr());
-          if ret == 0 {
-              println!("TCPIP comms ({}): {}", dll_str, ret);
-              thread::sleep(time::Duration::from_secs(1));
-          } else {
-              println!("TCPIP comms online.");
-              break;
-          }
+        let dll_cstring = CString::new(dll_str.as_ref()).unwrap();
+        let ret = (sf.cas_set_comm_library)(DF_MODULE_TCPIP, dll_cstring.as_ptr(), 1);
+        if ret == 0 {
+            panic!("TCPIP comms ({:?}): {}", dll_str, ret);
         }
+        debug!("TCPIP comms online.");
 
         for (scale_model, interp) in [
             (DfScale::CL3500, CL_INTERP.to_vec()), (DfScale::CL5000, CL_INTERP.to_vec()),
@@ -473,14 +516,15 @@ fn cas_api_init() -> ScaleAPI {
             (DfScale::CL7200, CL_INTERP.to_vec()), (DfScale::CL5000JR, CL_JRINTERP.to_vec())] {
             let mut dll = PathBuf::from(casprtc_path.parent().unwrap());
             dll.push(Path::new(&String::from_utf8(interp.to_vec()).unwrap()));
-            let dll_str = dll.as_path().as_os_str().to_string_lossy();
+            let dll_str = dll.as_path().to_str().unwrap();
+            let dll_cstring = dll_str.as_bytes();
             let out = format!("{:?}", scale_model);
-            let ret = (sf.cas_add_interpreter)(DfScaleType::LP.into(), scale_model.into(), dll_str.as_bytes().as_ptr());
+            let ret = (sf.cas_add_interpreter)(DfScaleType::LP.into(), scale_model.into(), dll_cstring.as_ptr() as *const i8);
             if ret == 0 {
-                println!("Add Interpreter {:?}: {}", out, ret);
+                debug!("Add Interpreter {:?}: {}", out, ret);
             }
         }
-        println!("{:?}", sf);
+        debug!("{:?}", sf);
         sf
     }
 }
@@ -489,7 +533,8 @@ lazy_static! {
     static ref DLLAPI: Mutex<ScaleAPI> = Mutex::new(cas_api_init());
 }
 
-static INGREDIENT_LABEL_ID: u16 = 62;
+const STANDARD_LABEL_ID: u16 = 61;
+const INGREDIENT_LABEL_ID: u16 = 62;
 const FIELDS : [&str; 19] = ["Department No", "PLU No", "Name1", "Name2", "Itemcode",
                              "Unit Price", "Origin No", "Label No"," Category No",
                              "Direct Ingredient", "Sell By Time", "Sell By Date",
@@ -514,36 +559,54 @@ fn next_plu(hs: &mut HashSet<u16>, item: &super::api::ProductData) -> u16 {
 }
 pub extern "C" fn recvproc (data: TD_ST_TRANSDATA_V02) -> i32 { 
     let ip = lpstr_to_strref(data.lpIP); // as * const i8).to_str().unwrap() };
+    let cas = DLLAPI.lock().unwrap();
+    let mut scale = cas.scales.get(&ip).unwrap().lock().unwrap();
+    scale.last_recv_action = data.wdAction;
     match data.wdAction {
-        DfAction::DELETEALL | DfAction::DOWNLOAD => {
-            let cas = DLLAPI.lock().unwrap();
-            let mut scale = cas.scales.get(&ip).unwrap().lock().unwrap();
-            let rc = cas.push_products(&scale);
-            match rc {
-                Ok(r) => {
-                    if r {
-                        scale.product_idx = scale.product_idx + 1;
-                    } else {
-                        scale.complete = true;
+        DfAction::DELETEALL => {
+            debug!("RECV: {:?}", data);
+            let pdata = data.pData as *const TD_ST_PLU_V06;
+            unsafe {
+                let name = lpstr_to_strref(&(*pdata).chName1 as *const i8);
+                if name.starts_with("W") {
+                    scale.delete_completed = true;
+                    let rc = cas.push_plu(&mut scale);
+                    match rc {
+                        Ok(_r) => {
+                        },
+                        Err(e) => {
+                            error!("{} errored: {}", scale.ip, e);
+                            cas.disconnect_scale(&scale);
+                        }
                     }
+                }
+            }
+        },
+        DfAction::DOWNLOAD => {
+            debug!("RECV: {:?}", data);
+            scale.plus_downloaded += 1;
+            scale.product_idx += 1;
+            let rc = cas.push_plu(&mut scale);
+            match rc {
+                Ok(_r) => {
                 },
                 Err(e) => {
-                    println!("{} errored: {}", scale.ip, e);
+                    error!("{} errored: {}", scale.ip, e);
                     cas.disconnect_scale(&scale);
                 }
             }
         },
         _ => {
-            println!("RECV: {:?}", data);
+            debug!("RECV: {:?}", data);
         }
     }
     1
 }
-pub fn lpstr_to_strref(ptr: *const u8) -> String {
+pub fn lpstr_to_strref(ptr: *const i8) -> String {
     if ptr == std::ptr::null() {
         "[null]".to_owned()
     } else {
-        unsafe { CStr::from_ptr(ptr as * const i8).to_str().unwrap() }.to_string()
+        unsafe { CStr::from_ptr(ptr).to_str().unwrap() }.to_string()
     }
 }
 pub extern "C" fn stateproc (data: TD_ST_TRANSDATA_V02) -> i32 {
@@ -552,45 +615,215 @@ pub extern "C" fn stateproc (data: TD_ST_TRANSDATA_V02) -> i32 {
         let pdata = data.pData as *const TD_ST_STATE;
         ((*pdata).wdState, lpstr_to_strref((*pdata).lpDescription))
     };
+    debug!("STATE {:?}", state);
+    let cas = DLLAPI.lock().unwrap();
+    let mut scale = {
+        let wrapper = cas.scales.get(&ip);
+        if wrapper.is_none() {
+            warn!("State message {:?}: {} from unknown scale {}", state, description, ip);
+            return 0;
+        }
+        wrapper.unwrap().lock().unwrap()
+    };
+    scale.state = state;
     match state {
         DfState::CONNECT => {
-            println!("{} Connected: {}", ip, description);
-            let cas = DLLAPI.lock().unwrap();
-            let mut scale = cas.scales.get(&ip).unwrap().lock().unwrap();
-            scale.state = state;
+            info!("{} Connected: {}", ip, description);
             if scale.should_delete {
-                cas.delete_plus(&scale);
+                cas.delete_plus(&mut scale);
             } else {
-                let rc = cas.push_products(&scale);
+                let rc = cas.push_plu(&mut scale);
                 match rc {
                     Ok(r) => {
                         if r {
                             scale.product_idx = scale.product_idx + 1;
-                        } else {
-                            scale.complete = true;
                         }
                     },
                     Err(e) => {
-                        println!("Scale {}: {}", scale.ip, e);
+                        error!("Scale {}: {}", scale.ip, e);
                         cas.disconnect_scale(&scale);
                     }
                 }
             }
             return 1;
         },
+        DfState::RECEIVETIMEOVER => {
+            return 1;
+        }
         _ => {
-            println!("Unhandled state: {:?}", state);
+            warn!("Unhandled state: {:?}", state);
         }
     };
     0
 }
 
+impl ScaleAPI {
+    fn make_transdata(&self, ip: *const i8, idx: cty::c_short, action: DfAction, datatype: DfData, data: *mut cty::c_void, data_size: usize) -> TD_ST_TRANSDATA_V02 {
+        TD_ST_TRANSDATA_V02 {
+            shScaleID: idx,
+            lpIP: ip,
+            wdScaleType: DfScaleType::LP,
+            wdScaleModel: DfScale::CL5500,
+            btCommType: DF_COMMTYPE_TCPIP,
+            btDataType: datatype,
+            btSendType: DfSendType::NORMAL,
+            wdAction: action.into(),
+            wdDataSize: data_size as WORD,
+            pData: data,
+            dwScaleMainVersion: 295,
+            dwScaleSubVersion: 7,
+            dwScaleCountry: 2,
+            dwScaleDataVersion: 20,
+            dwReserveVersion: 0,
+            pReserve: std::ptr::null_mut()
+        }
+    }
+    pub fn delete_plus(&self, scale: &mut Scale) -> bool {
+        info!("Deleting PLUs off scale {}", scale.ip);
+        match scale.state {
+            DfState::CONNECT => {}
+            _ => {
+                error!("Scale {} in unexpected state: {:?}", scale.ip, scale.state);
+                return false;
+            }
+        }
+        let lp_ip = CString::new(scale.ip.to_string()).unwrap();
+        let td = {
+            self.make_transdata(lp_ip.as_ptr(), scale.idx, DfAction::DELETEALL, DfData::PLU_V06, std::ptr::null_mut(), 0)
+        };
+        unsafe {
+            debug!("SEND {} <- {:?}", lpstr_to_strref(td.lpIP), td);
+            scale.last_send_action = DfAction::DELETEALL;
+            let ret = (self.cas_senddata_ex)(td);
+            debug!("SEND ret {}", ret);
+        }
+        true
+    }
+    pub fn push_plu(&self, scale: &mut Scale) -> Result<bool> {
+        if scale.product_idx as usize >= scale.products.len() {
+            return Ok(false)
+        }
+        match scale.state {
+            DfState::CONNECT => {}
+            _ => {
+                return Err(anyhow!("Scale {} in unexpected state: {:?}", scale.ip, scale.state));
+            }
+        }
+        let lp_ip = CString::new(scale.ip.to_string()).unwrap();
+        let mut td = {
+            self.make_transdata(lp_ip.as_ptr(), scale.idx, DfAction::DOWNLOAD, DfData::PLU_V06, std::ptr::null_mut(), 0)
+        };
+
+        let item = &scale.products[scale.product_idx as usize];
+        let mut plu: TD_ST_PLU_V06 = item.into();
+        let dw_plu = std::ptr::addr_of!(plu.dwPLU);
+        info!("Pushing PLU {} to {}", unsafe { std::ptr::read_unaligned(dw_plu) }, scale.ip);
+        td.wdDataSize = std::mem::size_of::<TD_ST_PLU_V06>() as u16;
+        td.pData = std::ptr::addr_of_mut!(plu) as *mut cty::c_void;
+
+        scale.last_send_action = DfAction::DOWNLOAD;
+        let ret = unsafe {
+            debug!("SEND {} <- {:?}", lpstr_to_strref(td.lpIP), td);
+            (self.cas_senddata_ex)(td)
+        };
+        if ret == 0 {
+            return Err(anyhow!("error sending PLU data"));
+        }
+        Ok(scale.products.len() > scale.product_idx as usize + 1)
+    }
+    pub fn add_scale(&mut self, ip: &str, idx: cty::c_short, should_delete: bool) -> bool {
+        let lp_ip = CString::new(ip).unwrap();
+        let td = TD_ST_CONNECTION_V02 {
+            shScaleID: idx,
+            lpIP: lp_ip.as_ptr(),
+            wdPort: 20304,
+            wdScaleType: DfScaleType::LP.into(),
+            wdScaleModel: DfScale::CL5500.into(),
+            wdTimeOut: DF_TRANS_TIMEOUT,
+            wdRetryCount: DF_TRANS_RETRYCOUNT,
+            btCommType: DF_COMMTYPE_TCPIP,
+            btTransType: DF_TRANSTYPE_PROC,
+            btSocketType: 1,
+            btDataType: DfData::CUSTOM,
+            btLogStatus: 0,
+            dwMsgNo: 0,
+            dwStateMsgNo: 0,
+            lpLogFileName: std::ptr::null_mut(),
+            pRecvProc: recvproc,
+            pStateProc: stateproc,
+            // 2.95.7,2.0,2
+            dwScaleMainVersion: 295,
+            dwScaleSubVersion: 7,
+            dwScaleCountry: 2,
+            dwScaleDataVersion: 20,
+            dwReserveVersion: 0,
+            pReserve: std::ptr::null_mut()
+        };
+        let ret = unsafe { (self.cas_add_connection_ex)(td) };
+        if ret != 0 {
+            debug!("Scale added: {} as {}", ip, idx);
+            let mut scale = Scale::new(ip.to_string());
+            scale.idx = idx;
+            scale.should_delete = should_delete;
+            self.scales.insert(ip.to_string(), Arc::new(Mutex::new(scale)));
+        } else {
+            warn!("Adding scale connection failed: {}", ip.to_string());
+            return false;
+        }
+        debug!("IP: {:?}", lp_ip);
+        true
+    }
+
+    /*
+    pub fn ping_scale(&self, scale: &Scale) -> bool {
+        let lp_ip = CString::new(scale.ip.to_string()).unwrap();
+        let mut td = {
+            self.make_transdata(lp_ip.as_ptr(), scale.idx, DfAction::PING, DfData::PING, std::ptr::null_mut(), 0)
+        };
+        let mut pinginfo = TD_ST_PINGINFO::default();
+        td.wdDataSize = std::mem::size_of::<TD_ST_PINGINFO>() as u16;
+        td.pData = std::ptr::addr_of_mut!(pinginfo) as *mut cty::c_void;
+        let ret = unsafe {(self.cas_senddata_ex)(td)};
+        if ret != 0 {
+            return true
+        } else {
+            error!("Ping scale failed: {}", scale.ip.to_string());
+        }
+        false
+    }
+    */
+
+    pub fn disconnect_scale(&self, scale: &Scale) -> bool {
+        let lp_ip = CString::new(scale.ip.to_string()).unwrap();
+        let ret = unsafe {(self.cas_disconnect)(lp_ip.as_ptr(), scale.idx) };
+        if ret != 0 {
+            return true
+        } else {
+            error!("Connect to scale failed: {}", scale.ip.to_string());
+        }
+        false
+    }
+    pub fn connect_scale(&self, scale_ip: &String) -> bool {
+        let scale = self.scales.get(&scale_ip.to_string()).unwrap().lock().unwrap();
+        let lp_ip = CString::new(scale.ip.to_string()).unwrap();
+        let ret = unsafe {(self.cas_connect)(lp_ip.as_ptr(), scale.idx) };
+        if ret != 0 {
+            return true
+        } else {
+            error!("Connect to scale failed: {}", scale.ip.to_string());
+        }
+        false
+    }
+
+}
+
+// TBC
 pub struct Scales {
 }
 
 impl Scales {
     pub fn filtered_items(&mut self, api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<Vec<super::api::ProductData>> {
-        let dump_internal = args.get_flag("internal");
+        let dump_internal = !args.get_flag("external");
         let re = args.get_one::<String>("upc").unwrap();
         let upc_pat = Regex::new(re)?;
         let filter = |x: &super::api::ProductData| { !x.deleted && upc_pat.is_match(&x.upc).unwrap() };
@@ -613,7 +846,7 @@ impl Scales {
                 let plu = item.plu.as_ref().unwrap().parse::<u16>().unwrap();
                 if seen_plu.contains(&plu) || wrong_range(&item, plu) {
                      let new_plu = next_plu(&mut existing_plu, &item);
-                     println!("PLU assigned {} bad previous was {} - {}", new_plu, plu, item.description);
+                     info!("PLU assigned {} bad previous was {} - {}", new_plu, plu, item.description);
                      plu_assignment.push(PLUAssignment{ upc: item.upc.to_string(), plu: new_plu });
                     seen_plu.insert(new_plu);
                 } else {
@@ -623,7 +856,7 @@ impl Scales {
             else {
                 let new_plu = next_plu(&mut existing_plu, &item);
                 plu_assignment.push(PLUAssignment{ upc: item.upc.to_string(), plu: new_plu });
-                println!("PLU assigned {} - {}", new_plu, item.description);
+                info!("PLU assigned {} - {}", new_plu, item.description);
                 seen_plu.insert(new_plu);
             }
         }
@@ -649,8 +882,9 @@ impl Scales {
     }
 
     pub fn send(&mut self, api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<()> {
+        let progress = args.get_flag("progress");
         let filename = args.get_one::<String>("output").unwrap();
-        let preserve_plus = args.get_flag("preserve");
+        let delete_plus = args.get_flag("wipe");
         let weighed_items = self.filtered_items(api, args)?;
         self.build_xlsx(&weighed_items, filename)?;
         let weighed_items_ref = Arc::new(weighed_items);
@@ -658,11 +892,11 @@ impl Scales {
             let mut idx: cty::c_short = 1;
             for scale in scales.into_iter() {
                 let mut cas = DLLAPI.lock().unwrap();
-                if cas.add_scale(scale, idx, !preserve_plus) {
+                if cas.add_scale(scale, idx, delete_plus) {
                     idx = idx + 1;
-                    println!("Added scale: {:?}", scale);
+                    debug!("Added scale: {:?}", scale);
                 } else {
-                    println!("Error adding scale {}", scale);
+                    error!("Error adding scale {}", scale);
                 }
             }
             let ips: Vec<String> = {
@@ -677,27 +911,33 @@ impl Scales {
             }
 
             for scale_ip in ips.iter() {
-                println!("Connecting scale: {}", scale_ip);
+                debug!("Connecting scale: {}", scale_ip);
                 let cas = DLLAPI.lock().unwrap();
                 if cas.connect_scale(scale_ip) {
                 } else {
-                    println!("Connect to scale failed {}", scale_ip);
+                    error!("Connect to scale failed {}", scale_ip);
                 }
             }
 
             loop {
                 let mut done = true;
+                let mut scale_status = vec!["\rProgress".to_string()];
                 for scale_ip in ips.iter() {
                     let cas = DLLAPI.lock().unwrap();
                     let mut scale = cas.scales.get(scale_ip).unwrap().lock().unwrap();
-                    if scale.complete {
+                    if scale.complete() {
                         if !scale.notified {
                             scale.notified = true;
-                            println!("Scale {} is done.", scale.ip);
+                            info!("Scale {} is done.", scale.ip);
                         }
                     } else {
                         done = false;
                     }
+                    scale_status.push(scale.status_str())
+                }
+                if progress {
+                    print!("{}", scale_status.join(" "));
+                    io::stdout().flush().unwrap();
                 }
                 if done {
                     break;
@@ -755,160 +995,11 @@ impl Scales {
             worksheet.write_with_format(row, 18, &date, &date_format)?;
 
             row = row + 1;
-            println!("Writing: [{}] {} : {} : {}", plu, item.upc, item.description, item.normal_price);
+            info!("Writing: [{}] {} : {} : {}", plu, item.upc, item.description, item.normal_price);
         }
 
         workbook.save(filename)?;
 
         Ok(())
     }
-}
-
-impl ScaleAPI {
-    fn make_transdata(&self, ip: *const u8, idx: cty::c_short, action: DfAction, datatype: DfData, data: *mut cty::c_void, data_size: usize) -> TD_ST_TRANSDATA_V02 {
-        TD_ST_TRANSDATA_V02 {
-            shScaleID: idx,
-            lpIP: ip,
-            wdScaleType: DfScaleType::LP,
-            wdScaleModel: DfScale::CL5500,
-            btCommType: DF_COMMTYPE_TCPIP,
-            btDataType: datatype,
-            btSendType: DfSendType::NORMAL,
-            wdAction: action.into(),
-            wdDataSize: data_size as WORD,
-            pData: data,
-            dwScaleMainVersion: 295,
-            dwScaleSubVersion: 7,
-            dwScaleCountry: 2,
-            dwScaleDataVersion: 20,
-            dwReserveVersion: 0,
-            pReserve: std::ptr::null_mut()
-        }
-    }
-    pub fn delete_plus(&self, scale: &Scale) -> bool {
-        println!("Deleting PLUs off scale {}", scale.ip);
-        match scale.state {
-            DfState::CONNECT => {}
-            _ => {
-                println!("Scale {} in unexpected state: {:?}", scale.ip, scale.state);
-                return false;
-            }
-        }
-        let cstring_ip = CString::new(scale.ip.to_string()).unwrap();
-        let cstr_ip = cstring_ip.as_c_str();
-        let lp_ip = cstr_ip.as_ptr() as * const u8;
-        let td = {
-            self.make_transdata(lp_ip, scale.idx, DfAction::DELETEALL, DfData::PLU_V06, std::ptr::null_mut(), 0)
-        };
-        unsafe {
-            println!("SEND {} <- {:?}", lpstr_to_strref(td.lpIP), td);
-            let ret = (self.cas_senddata_ex)(td);
-            println!("SEND ret {}", ret);
-        }
-        true
-    }
-    pub fn push_products(&self, scale: &Scale) -> Result<bool> {
-        match scale.state {
-            DfState::CONNECT => {}
-            _ => {
-                return Err(anyhow!("Scale {} in unexpected state: {:?}", scale.ip, scale.state));
-            }
-        }
-        let cstring_ip = CString::new(scale.ip.to_string()).unwrap();
-        let cstr_ip = cstring_ip.as_c_str();
-        let lp_ip = cstr_ip.as_ptr() as * const u8;
-        let mut td = {
-            self.make_transdata(lp_ip, scale.idx, DfAction::DOWNLOAD, DfData::PLU_V06, std::ptr::null_mut(), 0)
-        };
-
-        if scale.product_idx as usize >= scale.products.len() {
-            return Err(anyhow!("overrun in product send"));
-        }
-        let item = &scale.products[scale.product_idx as usize];
-        let mut plu: TD_ST_PLU_V06 = item.into();
-        let dw_plu = std::ptr::addr_of!(plu.dwPLU);
-        println!("Pushing PLU {} to {}", unsafe { std::ptr::read_unaligned(dw_plu) }, scale.ip);
-        td.wdDataSize = std::mem::size_of::<TD_ST_PLU_V06>() as u16;
-        td.pData = std::ptr::addr_of_mut!(plu) as *mut cty::c_void;
-
-        let ret = unsafe {
-            //println!("SEND {} <- {:?}", lpstr_to_strref(td.lpIP), td);
-            (self.cas_senddata_ex)(td)
-        };
-        if ret == 0 {
-            return Err(anyhow!("error sending PLU data"));
-        }
-        Ok(scale.products.len() > scale.product_idx as usize + 1)
-    }
-    pub fn add_scale(&mut self, ip: &str, idx: cty::c_short, should_delete: bool) -> bool {
-        let cstring_ip = CString::new(ip).unwrap();
-        let cstr_ip = cstring_ip.as_c_str();
-        let lp_ip = cstr_ip.as_ptr() as * const u8;
-        let td = TD_ST_CONNECTION_V02 {
-            shScaleID: idx,
-            lpIP: lp_ip,
-            wdPort: 20304,
-            wdScaleType: DfScaleType::LP.into(),
-            wdScaleModel: DfScale::CL5500.into(),
-            wdTimeOut: DF_TRANS_TIMEOUT,
-            wdRetryCount: DF_TRANS_RETRYCOUNT,
-            btCommType: DF_COMMTYPE_TCPIP,
-            btTransType: DF_TRANSTYPE_PROC,
-            btSocketType: 1,
-            btDataType: DfData::CUSTOM,
-            btLogStatus: 0,
-            dwMsgNo: 0,
-            dwStateMsgNo: 0,
-            lpLogFileName: std::ptr::null_mut(),
-            pRecvProc: recvproc,
-            pStateProc: stateproc,
-            // 2.95.7,2.0,2
-            dwScaleMainVersion: 295,
-            dwScaleSubVersion: 7,
-            dwScaleCountry: 2,
-            dwScaleDataVersion: 20,
-            dwReserveVersion: 0,
-            pReserve: std::ptr::null_mut()
-        };
-        let ret = unsafe { (self.cas_add_connection_ex)(td) };
-        if ret != 0 {
-            println!("Scale added: {} as {}", ip, idx);
-            let mut scale = Scale::new(ip.to_string());
-            scale.idx = idx;
-            scale.should_delete = should_delete;
-            self.scales.insert(ip.to_string(), Arc::new(Mutex::new(scale)));
-        } else {
-            println!("Adding scale connection failed: {}", ip.to_string());
-            return false;
-        }
-        println!("IP: {:?}", cstr_ip);
-        true
-    }
-
-    pub fn disconnect_scale(&self, scale: &Scale) -> bool {
-        let cstring_ip = CString::new(scale.ip.to_string()).unwrap();
-        let cstr_ip = cstring_ip.as_c_str();
-        let lp_ip = cstr_ip.as_ptr() as * const u8;
-        let ret = unsafe {(self.cas_disconnect)(lp_ip, scale.idx) };
-        if ret != 0 {
-            return true
-        } else {
-            println!("Connect to scale failed: {}", scale.ip.to_string());
-        }
-        false
-    }
-    pub fn connect_scale(&self, scale_ip: &String) -> bool {
-        let scale = self.scales.get(&scale_ip.to_string()).unwrap().lock().unwrap();
-        let cstring_ip = CString::new(scale.ip.to_string()).unwrap();
-        let cstr_ip = cstring_ip.as_c_str();
-        let lp_ip = cstr_ip.as_ptr() as * const u8;
-        let ret = unsafe {(self.cas_connect)(lp_ip, scale.idx) };
-        if ret != 0 {
-            return true
-        } else {
-            println!("Connect to scale failed: {}", scale.ip.to_string());
-        }
-        false
-    }
-
 }

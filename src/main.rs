@@ -2,12 +2,17 @@ mod internal;
 
 use clap::{Command,Arg,ArgAction};
 use std::{env, fs};
+use simplelog::*;
+use log::*;
+use std::fs::File;
 
 fn main() {
     let mut cmd = Command::new("itretail_automation")
         .author("Theo Schlossnagle, jesus@lethargy.org")
         .version("0.0.1")
         .about("Automates certain tasks against IT Retail")
+        .arg(Arg::new("log-level").long("log-level").short('v').action(ArgAction::Set).value_name("off,error,warn,info,debug,trace").default_value("warn"))
+        .arg(Arg::new("log-file").long("log-file").short('l').action(ArgAction::Set).value_name("FILE"))
         .arg(Arg::new("username").long("username").short('u'))
         .arg(Arg::new("password").long("password").short('p'))
         .subcommand(Command::new("set-plu")
@@ -16,10 +21,12 @@ fn main() {
         )
         .subcommand(Command::new("scale-export")
             .arg(Arg::new("output").long("output").short('o').action(ArgAction::Set).value_name("FILE").default_value("scale.xlsx"))
-            .arg(Arg::new("internal").long("internal").num_args(0).action(ArgAction::SetTrue))
+            .arg(Arg::new("internal").long("internal").conflicts_with("external").num_args(0).action(ArgAction::SetTrue).hide(true))
+            .arg(Arg::new("external").long("external").conflicts_with("internal").num_args(0).action(ArgAction::SetTrue))
             .arg(Arg::new("upc").long("upc").action(ArgAction::Set).value_name("Regex").default_value("^002"))
             .arg(Arg::new("scale").long("scale").action(ArgAction::Append).value_name("IP Address"))
-            .arg(Arg::new("preserve").long("preserve").num_args(0).action(ArgAction::SetTrue))
+            .arg(Arg::new("wipe").long("wipe").num_args(0).action(ArgAction::SetTrue))
+            .arg(Arg::new("progress").long("progress").num_args(0).action(ArgAction::SetTrue))
         )
         .subcommand(Command::new("label-export")
             .arg(Arg::new("output").long("output").short('o').action(ArgAction::Set).value_name("FILE").default_value("labels.xlsx"))
@@ -39,7 +46,44 @@ fn main() {
             .arg(Arg::new("pull").long("pull").short('u').num_args(0).action(ArgAction::SetTrue)));
     let help = cmd.render_help();
     let m = cmd.get_matches();
-    
+
+    let ll = m.get_one::<String>("log-level").unwrap();
+    let llevel = match ll.as_str() {
+        "off" => LevelFilter::Off,
+        "error" => LevelFilter::Error,
+        "warn" => LevelFilter::Warn,
+        "info" => LevelFilter::Info,
+        "debug" => LevelFilter::Debug,
+        "trace" => LevelFilter::Trace,
+        lvl => {
+            println!("Unknown log-level {}, using warn.", lvl);
+            LevelFilter::Warn
+        }
+     };
+    let lconfig = ConfigBuilder::new()
+                  .set_level_color(Level::Error, Some(Color::Red))
+                  .set_level_color(Level::Warn, Some(Color::Magenta))
+                  .set_target_level(LevelFilter::Error)
+                  .set_time_level(LevelFilter::Debug)
+                  .set_max_level(LevelFilter::Error)
+                  .build();
+    let mut loggers: Vec<Box<dyn SharedLogger>> = vec![];
+    if let Some(logfile) = m.get_one::<String>("log-file") {
+        loggers.push(WriteLogger::new(
+            llevel,
+            lconfig.clone(),
+            File::create(logfile).unwrap(),
+        ));
+    } else {
+        loggers.push(TermLogger::new(
+            llevel,
+            lconfig.clone(),
+            TerminalMode::Mixed,
+            ColorChoice::Always,
+        ));
+    }
+    CombinedLogger::init(loggers).unwrap();
+
     if let Some(cli_pass) = m.get_one::<String>("password") {
         env::set_var("ITRETAIL_PASS", cli_pass)
     }
@@ -84,7 +128,7 @@ fn main() {
             let mut scale_file = internal::cas::Scales{};
             let r = scale_file.send(&mut api, &scmd);
             if r.is_err() {
-                println!("Error: {}", r.err().unwrap())
+                error!("Error: {}", r.err().unwrap())
             }
         },
         Some(("label-export", scmd)) => {
@@ -93,13 +137,13 @@ fn main() {
             let results = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
             let r = label_file.build_from_itretail_products(&results, &scmd);
             if r.is_err() {
-                println!("{}", r.err().unwrap())
+                error!("{}", r.err().unwrap())
             }
         },
         Some(("mailchimp-sync", scmd)) => {
             let r = internal::customer::mailchimp_sync(&mut api, &scmd);
             if r.is_err() {
-                println!("{:?}", r.err().unwrap())
+                error!("{:?}", r.err().unwrap())
             }
         },
         Some(("tvmenu", scmd)) => {
@@ -108,7 +152,7 @@ fn main() {
                 let results = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
                 let r = internal::tvmenu::make_listing(menu_file, &results);
                 if r.is_err() {
-                    println!("Error constructing menu from IT Retail: {}", r.err().unwrap());
+                    error!("Error constructing menu from IT Retail: {}", r.err().unwrap());
                 }
             }
             let menu_txt = fs::read_to_string(menu_file).expect("Could not open file.");
@@ -117,20 +161,20 @@ fn main() {
                                                                    scmd.get_one::<String>("backdrop"),
                                                                    scmd.get_flag("invert"));
             if r.is_err() {
-                println!("Error creating TV menu image: {}", r.err().unwrap());
+                error!("Error creating TV menu image: {}", r.err().unwrap());
             }
         }
         Some(("set-plu", scmd)) => {
             let upc = scmd.get_one::<String>("upc");
             let plus = scmd.get_one::<String>("plu");
             if upc.is_none() || upc.unwrap().len() != 13 || plus.is_none() || plus.unwrap().len() != 4 {
-                println!("Error, upc {:?} (should be 13 digits) or plu {:?} (should be 4 digits) invalid", upc, plus);
+                error!("Error, upc {:?} (should be 13 digits) or plu {:?} (should be 4 digits) invalid", upc, plus);
             } else {
                 let plu = u16::from_str_radix(plus.unwrap(), 10).ok().unwrap();
                 let plu_assignment = internal::api::PLUAssignment { upc: upc.unwrap().to_string(), plu: plu };
                 let r = api.set_plu(vec!(plu_assignment));
                 if r.is_err() {
-                    println!("Error setting PLU: {}", r.err().unwrap())
+                    error!("Error setting PLU: {}", r.err().unwrap())
                 }
             }
         }

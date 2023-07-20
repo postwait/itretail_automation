@@ -573,6 +573,7 @@ pub extern "C" fn recvproc (data: TD_ST_TRANSDATA_V02) -> i32 {
                     let rc = cas.push_plu(&mut scale);
                     match rc {
                         Ok(_r) => {
+                            scale.product_idx += 1;
                         },
                         Err(e) => {
                             error!("{} errored: {}", scale.ip, e);
@@ -585,10 +586,10 @@ pub extern "C" fn recvproc (data: TD_ST_TRANSDATA_V02) -> i32 {
         DfAction::DOWNLOAD => {
             debug!("RECV: {:?}", data);
             scale.plus_downloaded += 1;
-            scale.product_idx += 1;
             let rc = cas.push_plu(&mut scale);
             match rc {
                 Ok(_r) => {
+                    scale.product_idx += 1;
                 },
                 Err(e) => {
                     error!("{} errored: {}", scale.ip, e);

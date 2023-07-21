@@ -86,6 +86,11 @@ pub struct ProductData {
     pub section_id: Option<i32>,
     pub wicable: Option<i32>,
     pub foodstamp: Option<bool>,
+    #[serde(rename = "QuantityOnHand")]
+    pub quantity_on_hand: Option<f32>,
+    pub size: Option<String>,
+    pub cast_cost: Option<f32>,
+    pub cost: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

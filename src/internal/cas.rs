@@ -370,7 +370,7 @@ impl From<&ProductData> for TD_ST_PLU_V06 {
         cp.dwItemCode = itemcode;
         cp.dwUnitPrice = (p.normal_price * 100.0) as u32;
         cp.btWeightUnit = 1; // by 1 lb
-        cp.wdLabel1 = STANDARD_LABEL_ID;
+        cp.wdLabel1 = 0;
         if p.second_description.is_some() {
             let ingredients = p.second_description.as_ref().unwrap();
             if ingredients.len() > 0 {

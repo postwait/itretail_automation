@@ -57,7 +57,7 @@ pub struct Customer {
     #[serde(rename = "BalanceLimit")]
     pub balance_limit: Option<f64>,
     #[serde(rename = "LoyaltyPoints")]
-    pub loyalty_points: Option<u32>,
+    pub loyalty_points: Option<i32>,
     #[serde(rename = "ExpirationDate")]
     pub expiration_date: Option<String>,
     #[serde(rename = "InstoreChargeEnabled")]

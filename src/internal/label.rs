@@ -43,6 +43,7 @@ impl LabelFile {
         let mut plu_assigned = 0;
         let mut row: u32 = 1;
         for item in items {
+            debug!("{:?}", item);
             worksheet.write_string(row, 0, &item.description)?;
             let plu = if item.plu.is_some() {
                 item.plu.unwrap().parse::<u16>().unwrap()

@@ -89,7 +89,8 @@ pub struct ProductData {
     #[serde(rename = "QuantityOnHand")]
     pub quantity_on_hand: Option<f32>,
     pub size: Option<String>,
-    pub cast_cost: Option<f32>,
+    pub case_cost: Option<f32>,
+    pub pack: Option<u32>,
     pub cost: Option<f32>,
 }
 

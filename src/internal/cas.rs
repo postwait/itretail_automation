@@ -11,14 +11,13 @@ use itertools::Itertools;
 use libloading::os::windows::Library;
 use libloading::os::windows::Symbol;
 use process_path::get_executable_path;
-use cty;
 use lazy_static::lazy_static;
 use std::sync::{Arc,Mutex};
 use log::*;
 
 use super::api::{PLUAssignment, ProductData};
 
-type LPSTR = * const cty::c_char;
+type LPSTR = * const std::ffi::c_char;
 type WORD = u16;
 type DWORD = u32;
 type BYTE = u8;
@@ -164,7 +163,7 @@ enum DfState {
 #[allow(non_camel_case_types,non_snake_case)]
 #[derive(Debug)]
 pub struct TD_ST_TRANSDATA_V01 {
-    shScaleID: cty::c_short,
+    shScaleID: std::ffi::c_short,
     lpIP: LPSTR,
     btCommType: BYTE,
     btSendType: DfSendType,
@@ -173,7 +172,7 @@ pub struct TD_ST_TRANSDATA_V01 {
     wdScaleModel: DfScale,
     wdAction: DfAction,
     wdDataSize: WORD,
-    pData: * mut cty::c_void,
+    pData: * mut std::ffi::c_void,
 }
 
 #[repr(C)]
@@ -197,7 +196,7 @@ impl Default for TD_ST_PINGINFO {
 #[allow(non_camel_case_types,non_snake_case)]
 #[derive(Debug)]
 pub struct TD_ST_TRANSDATA_V02 {
-    shScaleID: cty::c_short,
+    shScaleID: std::ffi::c_short,
     lpIP: LPSTR,
     btCommType: BYTE,
     btSendType: DfSendType,
@@ -206,13 +205,13 @@ pub struct TD_ST_TRANSDATA_V02 {
     wdScaleModel: DfScale,
     wdAction: DfAction,
     wdDataSize: WORD,
-    pData: * mut cty::c_void,
+    pData: * mut std::ffi::c_void,
     dwScaleMainVersion: DWORD,
     dwScaleSubVersion: DWORD,
     dwScaleCountry: DWORD,
     dwScaleDataVersion: DWORD,
     dwReserveVersion: DWORD,
-    pReserve: * mut cty::c_void
+    pReserve: * mut std::ffi::c_void
 }
 
 type FnProcRecv = extern "C" fn (data: TD_ST_TRANSDATA_V02) -> i32;
@@ -221,7 +220,7 @@ type FnProcRecv = extern "C" fn (data: TD_ST_TRANSDATA_V02) -> i32;
 #[allow(non_camel_case_types,non_snake_case)]
 #[derive(Debug)]
 pub struct TD_ST_CONNECTION_V02 {
-    shScaleID: cty::c_short,
+    shScaleID: std::ffi::c_short,
     lpIP: LPSTR,
     wdPort: WORD,
     wdScaleType: DfScaleType,
@@ -243,7 +242,7 @@ pub struct TD_ST_CONNECTION_V02 {
     dwScaleCountry: DWORD,
     dwScaleDataVersion: DWORD,
     dwReserveVersion: DWORD,
-    pReserve: * mut cty::c_void
+    pReserve: * mut std::ffi::c_void
 }
 
 #[repr(C,packed)]
@@ -386,8 +385,8 @@ impl From<&ProductData> for TD_ST_PLU_V06 {
 type FnSetCommLibrary = Symbol<unsafe extern fn(i32, LPSTR, i32) -> i32>;
 type FnAddInterpreter = Symbol<unsafe extern fn(WORD, WORD, LPSTR) -> i32>;
 type FnAddConnectionEx = Symbol<unsafe extern fn(TD_ST_CONNECTION_V02) -> i32>;
-type FnScale = Symbol<unsafe extern fn(LPSTR, cty::c_short) -> i32>;
-type FnScaleInt = Symbol<unsafe extern fn(LPSTR, cty::c_short, i32) -> i32>;
+type FnScale = Symbol<unsafe extern fn(LPSTR, std::ffi::c_short) -> i32>;
+type FnScaleInt = Symbol<unsafe extern fn(LPSTR, std::ffi::c_short, i32) -> i32>;
 type FnSendDataEx = Symbol<unsafe extern fn(TD_ST_TRANSDATA_V02) -> i32>;
 
 #[derive(Debug)]
@@ -660,7 +659,7 @@ pub extern "C" fn stateproc (data: TD_ST_TRANSDATA_V02) -> i32 {
 }
 
 impl ScaleAPI {
-    fn make_transdata(&self, ip: *const i8, idx: cty::c_short, action: DfAction, datatype: DfData, data: *mut cty::c_void, data_size: usize) -> TD_ST_TRANSDATA_V02 {
+    fn make_transdata(&self, ip: *const i8, idx: std::ffi::c_short, action: DfAction, datatype: DfData, data: *mut std::ffi::c_void, data_size: usize) -> TD_ST_TRANSDATA_V02 {
         TD_ST_TRANSDATA_V02 {
             shScaleID: idx,
             lpIP: ip,
@@ -721,7 +720,7 @@ impl ScaleAPI {
         let dw_plu = std::ptr::addr_of!(plu.dwPLU);
         info!("Pushing PLU {} to {}", unsafe { std::ptr::read_unaligned(dw_plu) }, scale.ip);
         td.wdDataSize = std::mem::size_of::<TD_ST_PLU_V06>() as u16;
-        td.pData = std::ptr::addr_of_mut!(plu) as *mut cty::c_void;
+        td.pData = std::ptr::addr_of_mut!(plu) as *mut std::ffi::c_void;
 
         scale.last_send_action = DfAction::DOWNLOAD;
         let ret = unsafe {
@@ -733,7 +732,7 @@ impl ScaleAPI {
         }
         Ok(scale.products.len() > scale.product_idx as usize + 1)
     }
-    pub fn add_scale(&mut self, ip: &str, idx: cty::c_short, should_delete: bool) -> bool {
+    pub fn add_scale(&mut self, ip: &str, idx: std::ffi::c_short, should_delete: bool) -> bool {
         let lp_ip = CString::new(ip).unwrap();
         let td = TD_ST_CONNECTION_V02 {
             shScaleID: idx,
@@ -784,7 +783,7 @@ impl ScaleAPI {
         };
         let mut pinginfo = TD_ST_PINGINFO::default();
         td.wdDataSize = std::mem::size_of::<TD_ST_PINGINFO>() as u16;
-        td.pData = std::ptr::addr_of_mut!(pinginfo) as *mut cty::c_void;
+        td.pData = std::ptr::addr_of_mut!(pinginfo) as *mut std::ffi::c_void;
         let ret = unsafe {(self.cas_senddata_ex)(td)};
         if ret != 0 {
             return true
@@ -895,7 +894,7 @@ impl Scales {
             None => settings.scales.addresses.iter().collect::<Vec<_>>().into(),
         };
         if scales.len() > 0 {
-            let mut idx: cty::c_short = 1;
+            let mut idx: std::ffi::c_short = 1;
             for scale in scales.into_iter() {
                 let mut cas = DLLAPI.lock().unwrap();
                 if cas.add_scale(scale, idx, delete_plus) {

@@ -20,6 +20,7 @@ pub struct Mailchimp {
 #[allow(unused)]
 pub struct Scales {
     pub addresses: Vec<String>,
+    pub timeout_seconds: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,12 +55,13 @@ impl Settings {
                     .required(false),
             )
             .add_source(Environment::with_prefix("app"))
-            // You may also programmatically change settings
+            // You may also programmatically change settings?
             .set_default("itretail.username", "")?
             .set_default("itretail.password", "")?
             .set_default("mailchimp.token", "")?
             .set_default("mailchimp.dc", "us21")?
             .set_default("scales.addresses", Vec::<String>::with_capacity(0))?
+            .set_default("scales.timeout_seconds", 300)?
             .build()?;
 
         // You can deserialize (and thus freeze) the entire configuration as

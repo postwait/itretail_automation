@@ -25,6 +25,7 @@ fn main() {
             .arg(Arg::new("external").long("external").conflicts_with("internal").num_args(0).action(ArgAction::SetTrue))
             .arg(Arg::new("upc").long("upc").action(ArgAction::Set).value_name("Regex").default_value("^002"))
             .arg(Arg::new("scale").long("scale").action(ArgAction::Append).value_name("IP Address"))
+            .arg(Arg::new("timeout-seconds").long("timeout-seconds").short('w').action(ArgAction::Set).value_name("seconds").value_parser(clap::value_parser!(u32)))
             .arg(Arg::new("wipe").long("wipe").num_args(0).action(ArgAction::SetTrue))
             .arg(Arg::new("progress").long("progress").num_args(0).action(ArgAction::SetTrue))
         )
@@ -138,8 +139,10 @@ fn main() {
             let mut scale_file = internal::cas::Scales{};
             let r = scale_file.send(&mut api, &settings, &scmd);
             if r.is_err() {
-                error!("Error: {}", r.err().unwrap())
+                error!("Error: {}", r.err().unwrap());
+                std::process::exit(exitcode::SOFTWARE);
             }
+            std::process::exit(exitcode::OK);
         },
         Some(("label-export", scmd)) => {
             let filename = scmd.get_one::<String>("output").unwrap();
@@ -147,14 +150,18 @@ fn main() {
             let results = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
             let r = label_file.build_from_itretail_products(&results, &scmd);
             if r.is_err() {
-                error!("{}", r.err().unwrap())
+                error!("{}", r.err().unwrap());
+                std::process::exit(exitcode::SOFTWARE);
             }
+            std::process::exit(exitcode::OK);
         },
         Some(("mailchimp-sync", scmd)) => {
             let r = internal::customer::mailchimp_sync(&mut api, &settings, &scmd);
             if r.is_err() {
-                error!("{:?}", r.err().unwrap())
+                error!("{:?}", r.err().unwrap());
+                std::process::exit(exitcode::SOFTWARE);
             }
+            std::process::exit(exitcode::OK);
         },
         Some(("tvmenu", scmd)) => {
             let menu_file = scmd.get_one::<String>("menu").unwrap();
@@ -163,6 +170,7 @@ fn main() {
                 let r = internal::tvmenu::make_listing(menu_file, &results);
                 if r.is_err() {
                     error!("Error constructing menu from IT Retail: {}", r.err().unwrap());
+                    std::process::exit(exitcode::SOFTWARE);
                 }
             }
             let menu_txt = fs::read_to_string(menu_file).expect("Could not open file.");
@@ -172,24 +180,30 @@ fn main() {
                                                                    scmd.get_flag("invert"));
             if r.is_err() {
                 error!("Error creating TV menu image: {}", r.err().unwrap());
+                std::process::exit(exitcode::SOFTWARE);
             }
+            std::process::exit(exitcode::OK);
         }
         Some(("set-plu", scmd)) => {
             let upc = scmd.get_one::<String>("upc");
             let plus = scmd.get_one::<String>("plu");
             if upc.is_none() || upc.unwrap().len() != 13 || plus.is_none() || plus.unwrap().len() != 4 {
                 error!("Error, upc {:?} (should be 13 digits) or plu {:?} (should be 4 digits) invalid", upc, plus);
+                std::process::exit(exitcode::USAGE);
             } else {
                 let plu = u16::from_str_radix(plus.unwrap(), 10).ok().unwrap();
                 let plu_assignment = internal::api::PLUAssignment { upc: upc.unwrap().to_string(), plu: plu };
                 let r = api.set_plu(vec!(plu_assignment));
-                if r.is_err() {
-                    error!("Error setting PLU: {}", r.err().unwrap())
+                if r.is_ok() {
+                    std::process::exit(exitcode::OK);
                 }
+                error!("Error setting PLU: {}", r.err().unwrap());
+                std::process::exit(exitcode::SOFTWARE);
             }
         }
         _ => {
-            println!("{}", help)
+            println!("{}", help);
+            std::process::exit(exitcode::USAGE);
         }
     }
 }

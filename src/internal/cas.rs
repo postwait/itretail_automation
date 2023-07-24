@@ -2,7 +2,7 @@ use anyhow::{anyhow,Result};
 use std::collections::{HashMap,HashSet};
 use std::path::{Path,PathBuf};
 use std::ffi::{CStr, CString};
-use std::{thread,time,io::{self,Write}};
+use std::{thread,time::{self,Instant},io::{self,Write}};
 use clap::ArgMatches;
 use fancy_regex::Regex;
 use rust_xlsxwriter::{Format, Workbook};
@@ -889,6 +889,10 @@ impl Scales {
         let weighed_items = self.filtered_items(api, args)?;
         self.build_xlsx(&weighed_items, filename)?;
         let weighed_items_ref = Arc::new(weighed_items);
+        let timeout = match args.get_one::<u32>("timeout-seconds") {
+            Some(secs) => secs,
+            None => &settings.scales.timeout_seconds
+        };
         let scales: Vec<&String> = match args.get_many::<String>("scale") {
             Some(set) => set.collect::<Vec<_>>().into(),
             None => settings.scales.addresses.iter().collect::<Vec<_>>().into(),
@@ -924,6 +928,7 @@ impl Scales {
                 }
             }
 
+            let start = Instant::now();
             loop {
                 let mut done = true;
                 let mut scale_status = vec!["\rProgress".to_string()];
@@ -946,6 +951,10 @@ impl Scales {
                 }
                 if done {
                     break;
+                }
+                if *timeout != 0 && start.elapsed().as_secs() as u32 > *timeout {
+                    error!("Operation timed out after {} seconds.", start.elapsed().as_secs());
+                    return Err(anyhow!("timeout"));
                 }
                 thread::sleep(time::Duration::from_secs(1));
             }

@@ -47,6 +47,12 @@ fn main() {
     let help = cmd.render_help();
     let m = cmd.get_matches();
 
+    let res = internal::settings::Settings::new();
+    if res.is_err() {
+        panic!("Failed to read configuration file: {}", res.err().unwrap());
+    }
+    let settings = res.ok().unwrap();
+
     let ll = m.get_one::<String>("log-level").unwrap();
     let llevel = match ll.as_str() {
         "off" => LevelFilter::Off,
@@ -85,10 +91,14 @@ fn main() {
     CombinedLogger::init(loggers).unwrap();
 
     if let Some(cli_pass) = m.get_one::<String>("password") {
-        env::set_var("ITRETAIL_PASS", cli_pass)
+        env::set_var("ITRETAIL_PASSWORD", cli_pass)
+    } else if settings.itretail.password.len() > 0 {
+        env::set_var("ITRETAIL_PASSWORD", settings.itretail.password.to_string());
     }
     if let Some(cli_user) = m.get_one::<String>("username") {
-        env::set_var("ITRETAIL_USER", cli_user)
+        env::set_var("ITRETAIL_USERNAME", cli_user)
+    } else if settings.itretail.username.len() > 0 {
+        env::set_var("ITRETAIL_USERNAME", settings.itretail.username.to_string());
     }
 
     let handle = internal::api::create_api();
@@ -104,20 +114,20 @@ fn main() {
             println!(r"A username is needed and is not present in the environment. Add one.
 
             On Windows:
-                $env:ITRETAIL_USER = 'user@example.com'
+                $env:ITRETAIL_USERNAME = 'user@example.com'
 
             On Unix:
-                export ITRETAIL_USER='user@example.com'
+                export ITRETAIL_USERNAME='user@example.com'
 ")
         }
         if err.to_string().contains("no password provided") {
             println!(r"A password is needed and is not present in the environment. Add one.
 
             On Windows:
-                $env:ITRETAIL_PASS = 'password'
+                $env:ITRETAIL_PASSWORD = 'password'
 
             On Unix:
-                export ITRETAIL_PASS='password'
+                export ITRETAIL_PASSWORD='password'
 ")
         }
         panic!("{}", err)
@@ -126,7 +136,7 @@ fn main() {
     match m.subcommand() {
         Some(("scale-export", scmd)) => {
             let mut scale_file = internal::cas::Scales{};
-            let r = scale_file.send(&mut api, &scmd);
+            let r = scale_file.send(&mut api, &settings, &scmd);
             if r.is_err() {
                 error!("Error: {}", r.err().unwrap())
             }
@@ -141,7 +151,7 @@ fn main() {
             }
         },
         Some(("mailchimp-sync", scmd)) => {
-            let r = internal::customer::mailchimp_sync(&mut api, &scmd);
+            let r = internal::customer::mailchimp_sync(&mut api, &settings, &scmd);
             if r.is_err() {
                 error!("{:?}", r.err().unwrap())
             }

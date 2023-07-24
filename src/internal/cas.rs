@@ -882,14 +882,18 @@ impl Scales {
         Ok(items)
     }
 
-    pub fn send(&mut self, api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<()> {
+    pub fn send(&mut self, api: &mut super::api::ITRApi, settings: &super::settings::Settings, args: &ArgMatches) -> Result<()> {
         let progress = args.get_flag("progress");
         let filename = args.get_one::<String>("output").unwrap();
         let delete_plus = args.get_flag("wipe");
         let weighed_items = self.filtered_items(api, args)?;
         self.build_xlsx(&weighed_items, filename)?;
         let weighed_items_ref = Arc::new(weighed_items);
-        if let Some(scales) = args.get_many::<String>("scale") {
+        let scales: Vec<&String> = match args.get_many::<String>("scale") {
+            Some(set) => set.collect::<Vec<_>>().into(),
+            None => settings.scales.addresses.iter().collect::<Vec<_>>().into(),
+        };
+        if scales.len() > 0 {
             let mut idx: cty::c_short = 1;
             for scale in scales.into_iter() {
                 let mut cas = DLLAPI.lock().unwrap();

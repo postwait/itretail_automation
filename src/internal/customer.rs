@@ -81,13 +81,13 @@ pub struct MCApi {
     api_token: String,
 }
 
-pub fn mailchimp_api_new(token: Option<&String>) -> MCApi {
+pub fn mailchimp_api_new(settings: &super::settings::Settings, token: Option<&String>) -> MCApi {
     MCApi{
-        dc: env::var("MAILCHIMP_DC").unwrap_or("us21".to_string()),
+        dc: env::var("MAILCHIMP_DC").unwrap_or(settings.mailchimp.dc.to_string()),
         api_token: match token {
             Some(string) => string.to_string(),
             None => {
-                match env::var("MAILCHIMP_API_TOKEN") {
+                match env::var("MAILCHIMP_TOKEN") {
                     Ok(tok) => tok,
                     Err(_) => {
                         error!("No Mailchimp API token, this will not work well.");
@@ -189,7 +189,7 @@ impl MCApi {
     }
 }
 
-pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<()> {
+pub fn mailchimp_sync(api: &mut super::api::ITRApi, settings: &super::settings::Settings, args: &ArgMatches) -> Result<()> {
     let mut itr_customers = HashMap::new();
     let itc_vec: Vec<super::api::Customer> = api.get_customers()?;
     for customer in itc_vec {
@@ -198,8 +198,15 @@ pub fn mailchimp_sync(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result
             itr_customers.insert(email, customer);
         }
     }
-    let mc_token =args.get_one::<String>("mc_token");
-    let mut mc_api = mailchimp_api_new(mc_token);
+    let mc_token = match args.get_one::<String>("mc_token") {
+        Some(tok) => Some(tok),
+        None => if settings.mailchimp.token.len() > 0 {
+            Some(&settings.mailchimp.token)
+        } else {
+            None
+        }
+    };
+    let mut mc_api = mailchimp_api_new(&settings, mc_token);
     let list = mc_api.get_list(args.get_one::<String>("listid"))?;
     let subscribers: HashMap<String, Member> = mc_api.get_subscribers(&list.id)?;
 

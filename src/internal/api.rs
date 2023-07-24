@@ -204,13 +204,13 @@ impl ITRApi {
 
         debug!("Fetching token");
         let client = reqwest::blocking::Client::new();
-        let user = match env::var("ITRETAIL_USER") {
+        let user = match env::var("ITRETAIL_USERNAME") {
             Ok(p) => p,
             Err(..) => {
                 return Err(anyhow!("no username provided"))
             }
         };
-        let pass = match env::var("ITRETAIL_PASS") {
+        let pass = match env::var("ITRETAIL_PASSWORD") {
             Ok(p) => p,
             Err(..) => {
                 return Err(anyhow!("no password provided"))

@@ -533,7 +533,8 @@ lazy_static! {
     static ref DLLAPI: Mutex<ScaleAPI> = Mutex::new(cas_api_init());
 }
 
-const STANDARD_LABEL_ID: u16 = 61;
+//const SHRINK_LABEL_ID: u16 = 51;
+//const STANDARD_LABEL_ID: u16 = 61;
 const INGREDIENT_LABEL_ID: u16 = 62;
 const FIELDS : [&str; 19] = ["Department No", "PLU No", "Name1", "Name2", "Itemcode",
                              "Unit Price", "Origin No", "Label No"," Category No",

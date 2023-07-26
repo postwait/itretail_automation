@@ -352,6 +352,10 @@ impl Default for TD_ST_PLU_V06 {
     }
 }
 
+//const SHRINK_LABEL_ID: u16 = 51;
+//const STANDARD_LABEL_ID: u16 = 61;
+const INGREDIENT_LABEL_ID: u16 = 62;
+
 fn jam(string: &String, out: &mut [i8]) {
     let bs = string.as_bytes();
     let bsr = bs.as_ptr() as *const i8;
@@ -531,15 +535,6 @@ fn cas_api_init() -> ScaleAPI {
 lazy_static! {
     static ref DLLAPI: Mutex<ScaleAPI> = Mutex::new(cas_api_init());
 }
-
-//const SHRINK_LABEL_ID: u16 = 51;
-//const STANDARD_LABEL_ID: u16 = 61;
-const INGREDIENT_LABEL_ID: u16 = 62;
-const FIELDS : [&str; 19] = ["Department No", "PLU No", "Name1", "Name2", "Itemcode",
-                             "Unit Price", "Origin No", "Label No"," Category No",
-                             "Direct Ingredient", "Sell By Time", "Sell By Date",
-                             "Packed Date", "Group No", "Unit Weight", "Nutrifact No",
-                             "PLU Type", "Packed Time", "Update Date"];
 
 fn wrong_range(item: &super::api::ProductData, plu: u16) -> bool {
     (item.description.starts_with("(I)") && plu >= 1000) ||
@@ -831,7 +826,10 @@ impl Scales {
 
         let json = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
         let mut items: Vec<super::api::ProductData> = serde_json::from_str(&json)?;
-        items = items.into_iter().filter(filter).sorted_by_key(|x| x.section_id.unwrap_or(0)).collect::<Vec<super::api::ProductData>>();
+        items = items.into_iter().filter(filter)
+            .sorted_by(|x, y| (&x.description).cmp(&y.description))
+            .sorted_by_key(|x| x.section_id.unwrap_or(0))
+            .collect::<Vec<super::api::ProductData>>();
 
         let mut existing_plu = HashSet::<u16>::new();
         let mut seen_plu = HashSet::<u16>::new();
@@ -884,10 +882,14 @@ impl Scales {
 
     pub fn send(&mut self, api: &mut super::api::ITRApi, settings: &super::settings::Settings, args: &ArgMatches) -> Result<()> {
         let progress = args.get_flag("progress");
-        let filename = args.get_one::<String>("output").unwrap();
         let delete_plus = args.get_flag("wipe");
         let weighed_items = self.filtered_items(api, args)?;
-        self.build_xlsx(&weighed_items, filename)?;
+        let plufile = args.get_one::<String>("output").unwrap();
+        self.build_plu_xlsx(api, &weighed_items, plufile, &args)?;
+        match args.get_one::<String>("scale-file") {
+            Some(scalefile) => self.build_scale_xlsx(&weighed_items, scalefile)?,
+            _ => ()
+        }
         let weighed_items_ref = Arc::new(weighed_items);
         let timeout = match args.get_one::<u32>("timeout-seconds") {
             Some(secs) => secs,
@@ -895,7 +897,11 @@ impl Scales {
         };
         let scales: Vec<&String> = match args.get_many::<String>("scale") {
             Some(set) => set.collect::<Vec<_>>().into(),
-            None => settings.scales.addresses.iter().collect::<Vec<_>>().into(),
+            None => if args.get_flag("no-scales") {
+                vec![]
+            } else {
+                settings.scales.addresses.iter().collect::<Vec<_>>().into()
+            },
         };
         if scales.len() > 0 {
             let mut idx: std::ffi::c_short = 1;
@@ -962,7 +968,58 @@ impl Scales {
         Ok(())
     }
 
-    pub fn build_xlsx(&mut self, weighed_items: &Vec<ProductData>, filename: &String) -> Result<()> {
+    pub fn build_plu_xlsx(&mut self, api: &mut super::api::ITRApi, weighed_items: &Vec<ProductData>, filename: &String, args: &ArgMatches) -> Result<()> {
+        let qlimit = args.get_one::<f32>("at-least").unwrap();
+        let mut workbook = Workbook::new();
+        let bold_format = Format::new().set_bold();
+        let decimal_format = Format::new().set_num_format("0.00");
+
+        let sections: HashMap<i32, String> = api.get_sections()?.iter().map(|s| (s.id as i32, s.name.to_owned())).collect();
+
+
+        const FIELDS: [&str; 3] = ["PLU", "Name", "Price"];
+
+        struct XSection {
+            name: String,
+            row: u32,
+        }
+        let mut sheets: HashMap<i32, XSection> = HashMap::new();
+        for item in weighed_items {
+            if item.quantity_on_hand.unwrap_or(0.0) <= *qlimit {
+                continue;
+            }
+            let section_id = item.section_id.unwrap_or(-1);
+            let section = match sheets.get_mut(&section_id) {
+                Some(sheet) => sheet,
+                None => {
+                    let worksheet = workbook.add_worksheet().set_name(&sections.get(&section_id).unwrap_or(&"Unknown".to_string()))?;
+                    sheets.insert(section_id, XSection{ name: worksheet.name(), row: 1});
+                    let section = sheets.get_mut(&section_id).unwrap();
+                    for idx in 0..FIELDS.len() {
+                        worksheet.write_with_format(0, idx.try_into().unwrap(), FIELDS[idx], &bold_format)?;
+                    }
+                    section
+                }
+            };
+            let worksheet = workbook.worksheet_from_name(&section.name)?;
+            let plu = item.plu.as_ref().unwrap().parse::<u16>().unwrap();
+            worksheet.write_number(section.row, 0, plu)?;
+            worksheet.write_string(section.row, 1, &item.description)?;
+            worksheet.write_number_with_format(section.row, 2, item.normal_price, &decimal_format)?;
+            section.row += 1;
+        }
+
+        workbook.save(filename)?;
+
+        Ok(())
+    }
+    pub fn build_scale_xlsx(&mut self, weighed_items: &Vec<ProductData>, filename: &String) -> Result<()> {
+        const FIELDS : [&str; 19] = ["Department No", "PLU No", "Name1", "Name2", "Itemcode",
+                             "Unit Price", "Origin No", "Label No"," Category No",
+                             "Direct Ingredient", "Sell By Time", "Sell By Date",
+                             "Packed Date", "Group No", "Unit Weight", "Nutrifact No",
+                             "PLU Type", "Packed Time", "Update Date"];
+
         let mut workbook = Workbook::new();
         let bold_format = Format::new().set_bold();
         let decimal_format = Format::new().set_num_format("0.00");
@@ -971,7 +1028,7 @@ impl Scales {
         let date = Local::now().naive_local();
 
         let worksheet = workbook.add_worksheet();
-        for idx in 0..FIELDS.len()-1 {
+        for idx in 0..FIELDS.len() {
             worksheet.write_with_format(0, idx.try_into().unwrap(), FIELDS[idx], &bold_format)?;
         }
 

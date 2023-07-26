@@ -33,6 +33,12 @@ pub struct MinimalCustomer {
     pub frequent_shopper: bool,
 }
 #[derive(Deserialize, Debug)]
+pub struct Section {
+    pub id: u32,
+    pub name: String,
+    pub deleted: bool
+}
+#[derive(Deserialize, Debug)]
 pub struct Customer {
     #[serde(rename = "Id")]
     pub id: Option<String>,
@@ -326,6 +332,12 @@ impl ITRApi {
         let results = self.get(&"/api/CustomersData/GetAllCustomers".to_string()).expect("no results from API call");
         let customers: Vec<Customer> = serde_json::from_str(&results)?;
         Ok(customers)
+    }
+
+    pub fn get_sections(&mut self) -> Result<Vec<Section>> {
+        let results = self.get(&"/api/SectionsData/GetAllSections".to_string()).expect("no results from API call");
+        let sections: Vec<Section> = serde_json::from_str(&results)?;
+        Ok(sections)
     }
 
     pub fn make_customer(&mut self, c: &MinimalCustomer) -> Result<String> {

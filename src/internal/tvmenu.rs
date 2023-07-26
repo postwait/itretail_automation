@@ -1,5 +1,5 @@
-use anyhow::{Result};
-use image::{Rgba};
+use anyhow::Result;
+use image::Rgba;
 use imageproc::drawing::{draw_text_mut, text_size};
 use rusttype::{Font, Scale};
 use std::fs::OpenOptions;

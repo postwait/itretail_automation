@@ -970,6 +970,7 @@ impl Scales {
 
     pub fn build_plu_xlsx(&mut self, api: &mut super::api::ITRApi, weighed_items: &Vec<ProductData>, filename: &String, args: &ArgMatches) -> Result<()> {
         let qlimit = args.get_one::<f32>("at-least").unwrap();
+        let by_section = args.get_flag("by-section");
         let mut workbook = Workbook::new();
         let bold_format = Format::new().set_bold();
         let decimal_format = Format::new().set_num_format("0.00");
@@ -988,11 +989,19 @@ impl Scales {
             if item.quantity_on_hand.unwrap_or(0.0) <= *qlimit {
                 continue;
             }
-            let section_id = item.section_id.unwrap_or(-1);
+            let section_id = match by_section {
+                true => item.section_id.unwrap_or(-1),
+                false => 0
+            };
+            let unknown_section: String = match by_section {
+                true => String::from("Unknown"),
+                false => String::from("Products")
+            };
+            let section_name = sections.get(&section_id).unwrap_or(&unknown_section);
             let section = match sheets.get_mut(&section_id) {
                 Some(sheet) => sheet,
                 None => {
-                    let worksheet = workbook.add_worksheet().set_name(&sections.get(&section_id).unwrap_or(&"Unknown".to_string()))?;
+                    let worksheet = workbook.add_worksheet().set_name(section_name)?;
                     sheets.insert(section_id, XSection{ name: worksheet.name(), row: 1});
                     let section = sheets.get_mut(&section_id).unwrap();
                     for idx in 0..FIELDS.len() {

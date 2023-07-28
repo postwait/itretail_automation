@@ -21,6 +21,7 @@ fn main() {
         )
         .subcommand(Command::new("scale-export")
             .arg(Arg::new("output").long("output").short('o').action(ArgAction::Set).value_name("FILE").default_value("PLU.xlsx"))
+            .arg(Arg::new("by-section").long("by-section").action(ArgAction::SetTrue).num_args(0))
             .arg(Arg::new("scale-file").long("scale-file").action(ArgAction::Set).value_name("FILE"))
             .arg(Arg::new("internal").long("internal").conflicts_with("external").num_args(0).action(ArgAction::SetTrue).hide(true))
             .arg(Arg::new("external").long("external").conflicts_with("internal").num_args(0).action(ArgAction::SetTrue))

@@ -46,10 +46,10 @@ fn main() {
         )
         .subcommand(Command::new("tvmenu")
             .arg(Arg::new("backdrop").long("backdrop").action(ArgAction::Set).value_name("FILENAME"))
-            .arg(Arg::new("menu").long("menu").action(ArgAction::Set).value_name("FILENAME").default_value("menu.txt"))
-            .arg(Arg::new("output").long("output").action(ArgAction::Set).value_name("FILENAME").default_value("tvscreen.png"))
+            .arg(Arg::new("menu").long("menu").action(ArgAction::Set).value_name("FILENAME").conflicts_with("pull").default_value("menu.txt"))
+            .arg(Arg::new("output").long("output").action(ArgAction::Set).value_name("FILENAME").conflicts_with("pull").default_value("tvscreen.png"))
             .arg(Arg::new("invert").long("invert").short('i').num_args(0).action(ArgAction::SetTrue))
-            .arg(Arg::new("pull").long("pull").short('u').num_args(0).action(ArgAction::SetTrue)));
+            .arg(Arg::new("pull").long("pull").short('u').action(ArgAction::Set).conflicts_with("menu").conflicts_with("output")));
     let help = cmd.render_help();
     let m = cmd.get_matches();
 
@@ -105,6 +105,9 @@ fn main() {
         env::set_var("ITRETAIL_USERNAME", cli_user)
     } else if settings.itretail.username.len() > 0 {
         env::set_var("ITRETAIL_USERNAME", settings.itretail.username.to_string());
+    }
+    if settings.itretail.store_id.len() > 0 {
+        env::set_var("ITRETAIL_STOREID", settings.itretail.store_id.to_string());
     }
 
     let handle = internal::api::create_api();
@@ -169,17 +172,21 @@ fn main() {
             std::process::exit(exitcode::OK);
         },
         Some(("tvmenu", scmd)) => {
-            let menu_file = scmd.get_one::<String>("menu").unwrap();
-            if scmd.get_flag("pull") {
-                let results = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
-                let r = internal::tvmenu::make_listing(menu_file, &results);
-                if r.is_err() {
-                    error!("Error constructing menu from IT Retail: {}", r.err().unwrap());
-                    std::process::exit(exitcode::SOFTWARE);
+            let (menu_file, output_file) = match scmd.get_one::<String>("pull") {
+                Some(cat) => {
+                    let r = internal::tvmenu::make_listing(&mut api, &scmd);
+                    if r.is_err() {
+                        error!("Error constructing menu from IT Retail: {}", r.err().unwrap());
+                        std::process::exit(exitcode::SOFTWARE);
+                    }
+                    (r.unwrap(), String::from(cat) + ".png")
+                },
+                None => {
+                    (scmd.get_one::<String>("menu").unwrap().to_string(), scmd.get_one::<String>("output").unwrap().to_string())
                 }
-            }
+            };
             let menu_txt = fs::read_to_string(menu_file).expect("Could not open file.");
-            let r = internal::tvmenu::make_menu(scmd.get_one::<String>("output").unwrap(),
+            let r = internal::tvmenu::make_menu(&output_file,
                                                                    &menu_txt,
                                                                    scmd.get_one::<String>("backdrop"),
                                                                    scmd.get_flag("invert"));

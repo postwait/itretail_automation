@@ -101,6 +101,30 @@ pub struct ProductData {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct Shortcut {
+    #[serde(rename = "CategoryId")]
+    pub category_id: u32,
+    #[serde(rename = "Id")]
+    pub id: u32,
+    #[serde(rename = "Keystrokes")]
+    pub keystrokes: Option<String>,
+    #[serde(rename = "Sort")]
+    pub sort: u32,
+    #[serde(rename = "Text")]
+    pub text: Option<String>
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Category {
+    #[serde(rename = "Id")]
+    pub id: u32,
+    #[serde(rename = "Sort")]
+    pub sort: u32,
+    #[serde(rename = "Text")]
+    pub text: Option<String>,
+    #[serde(rename = "ProductLookupButtons")]
+    pub product_shortcuts: Vec<Shortcut>,
+}
+#[derive(Serialize, Deserialize, Debug)]
 struct BearerToken {
     access_token: String,
     token_type: String,
@@ -121,6 +145,7 @@ impl Default for BearerToken {
 
 pub struct ITRApi {
     backingfile: File,
+    store_id: String,
     bearer_token: BearerToken,
 }
 
@@ -181,6 +206,7 @@ pub fn create_api() -> Result<ITRApi> {
     let backingfile = get_dotfile("token.json", true)?;
     Ok(ITRApi {
         backingfile: backingfile,
+        store_id: env::var("ITRETAIL_STOREID")?,
         bearer_token: BearerToken::default(),
     })
 }
@@ -338,6 +364,14 @@ impl ITRApi {
         let results = self.get(&"/api/SectionsData/GetAllSections".to_string()).expect("no results from API call");
         let sections: Vec<Section> = serde_json::from_str(&results)?;
         Ok(sections)
+    }
+
+    pub fn get_categories(&mut self) -> Result<Vec<Category>> {
+        let mut hdrs = reqwest::header::HeaderMap::new();
+        hdrs.insert(reqwest::header::HeaderName::from_static("storeids"), reqwest::header::HeaderValue::from_str(&self.store_id)?);
+        let results = self.call::<Empty>(reqwest::Method::GET, &"/api/ProductLookupCategoriesData/GetOne/".to_string(), Some(hdrs), None).expect("no results from API call");
+        let cats: Vec<Category> = serde_json::from_str(&results)?;
+        Ok(cats)
     }
 
     pub fn make_customer(&mut self, c: &MinimalCustomer) -> Result<String> {

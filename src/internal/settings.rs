@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub struct ITRetail {
     pub username: String,
     pub password: String,
+    pub store_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +57,7 @@ impl Settings {
             )
             .add_source(Environment::with_prefix("app"))
             // You may also programmatically change settings?
+            .set_default("itretail.store_id", "")?
             .set_default("itretail.username", "")?
             .set_default("itretail.password", "")?
             .set_default("mailchimp.token", "")?

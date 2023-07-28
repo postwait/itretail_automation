@@ -1,8 +1,10 @@
 use anyhow::Result;
+use clap::ArgMatches;
 use image::Rgba;
 use imageproc::drawing::{draw_text_mut, text_size};
 use rusttype::{Font, Scale};
 use std::fs::OpenOptions;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use lazy_static::lazy_static;
@@ -12,16 +14,47 @@ lazy_static! {
     static ref DEFAULT_BACKDROP: image::ImageBuffer<Rgba<u8>, Vec<u8>> = image::load_from_memory(include_bytes!("../assets/backdrop.png")).unwrap().into_rgba8();
 }
 
-pub fn make_listing(output_file: &str, json: &String) -> Result<()> {
-    let items: Vec<super::api::ProductData> = serde_json::from_str(json)?;
+pub fn make_listing(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<String> {
+    let mut output_file = args.get_one::<String>("menu").unwrap().to_string();
+    if let Some(pull) = args.get_one::<String>("pull") {
+        output_file = String::from(pull) + ".txt";
+    }
+    let cat_copy = output_file.clone();
+    let mut cat = cat_copy.split(".");
+    let cat_name = cat.nth(0).unwrap();
+    let json = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
+    let items: Vec<super::api::ProductData> = serde_json::from_str(&json)?;
     let items_iter = items.into_iter();
-    let weighed_items = items_iter.filter(|x| { !x.deleted && x.upc.starts_with("002") });
-    let mut menu_file = OpenOptions::new().write(true).create(true).truncate(true).open(output_file).expect("Could not open menu file");
-    for item in weighed_items {
-       menu_file.write(&format!("{} = ${:.2}/lb\r\n", item.description, item.normal_price).as_bytes()).expect("writing menu item");
+    let weighed_items: Vec<super::api::ProductData> = items_iter.filter(|x| { !x.deleted && x.upc.starts_with("002") }).collect();
+    let mut item_map = HashMap::new();
+    for item in weighed_items.iter() {
+        item_map.insert(item.upc.clone(), item);
+    }
+    let mut menu_file = OpenOptions::new().write(true).create(true).truncate(true).open(&output_file).expect("Could not open menu file");
+    let cats: Vec<super::api::Category> = api.get_categories().expect("no results from category request");
+    let mut set = false;
+    for cat in cats {
+        if cat.text.is_some() && cat.text.unwrap().eq(cat_name) {
+            info!("Using {} for product list", cat_name);
+            for choice in cat.product_shortcuts {
+                if choice.keystrokes.is_some() {
+                    if let Some(item) = item_map.get(&choice.keystrokes.unwrap()) {
+                        menu_file.write(&format!("{} = ${:.2}/lb\r\n", item.description, item.normal_price).as_bytes()).expect("writing menu item");
+                    }
+                }
+            }
+            set = true;
+            break;
+        }
+    }
+    if !set {
+        info!("Using all products");
+        for item in weighed_items {
+            menu_file.write(&format!("{} = ${:.2}/lb\r\n", item.description, item.normal_price).as_bytes()).expect("writing menu item");
+        }
     }
     menu_file.sync_all().expect("saving menu file");
-    Ok(())
+    Ok(output_file)
 }
 pub fn make_menu(output_file: &str, menu: &String, backdrop: Option<&String>, invert: bool) -> Result<()> {
     let path = Path::new(output_file);

@@ -1,3 +1,4 @@
+use chrono::{Local, SecondsFormat, Days};
 use home;
 use reqwest;
 use reqwest::blocking::multipart;
@@ -39,9 +40,30 @@ pub struct Section {
     pub deleted: bool
 }
 #[derive(Deserialize, Debug)]
+pub struct EJTxn {
+    #[serde(rename = "Id")]
+    pub id: String,
+    #[serde(rename = "CustomerLastName")]
+    pub customer_last_name: Option<String>,
+    #[serde(rename = "CustomerFirstName")]
+    pub customer_first_name: Option<String>,
+    #[serde(rename = "CustomerId")]
+    pub customer_id: Option<String>,
+    #[serde(rename = "Canceled")]
+    pub canceled: bool,
+    #[serde(rename = "Total")]
+    pub total: f64,
+    #[serde(rename = "TransactionDate")]
+    pub transaction_date: String,
+}
+#[derive(Deserialize, Debug)]
+struct EJTAnswer {
+    value: Vec<EJTxn>
+}
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Customer {
     #[serde(rename = "Id")]
-    pub id: Option<String>,
+    pub id: String,
     #[serde(rename = "CardNo")]
     pub card_no: Option<String>,
     #[serde(rename = "LastName")]
@@ -67,7 +89,27 @@ pub struct Customer {
     #[serde(rename = "ExpirationDate")]
     pub expiration_date: Option<String>,
     #[serde(rename = "InstoreChargeEnabled")]
-    pub instore_charge_enabled: bool,
+    pub instore_charge_enabled: Option<bool>,
+    #[serde(rename = "Address1")]
+    pub address1: Option<String>,
+    #[serde(rename = "Address2")]
+    pub address2: Option<String>,
+    #[serde(rename = "City")]
+    pub city: Option<String>,
+    #[serde(rename = "State")]
+    pub state: Option<String>,
+    #[serde(rename = "Created")]
+    pub created: Option<String>,
+    #[serde(rename = "Modified")]
+    pub modified: Option<String>,
+    #[serde(rename = "ModifiedBy")]
+    pub modified_by: Option<u32>,
+    #[serde(rename = "FrequentShopper")]
+    pub frequent_shopper: Option<bool>,
+    #[serde(rename = "CashBack")]
+    pub cash_back: Option<bool>,
+    #[serde(rename = "Inc")] // WTF is this?
+    pub inc: Option<u32>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -350,6 +392,12 @@ impl ITRApi {
         self.call(reqwest::Method::POST, endpoint, Some(json_hdrs), Some(json))
     }
 
+    pub fn put_json<T: Serialize + ?Sized>(&mut self, endpoint: &String, json: &T) -> Result<String> {
+        let mut json_hdrs = reqwest::header::HeaderMap::new();
+        json_hdrs.insert(CONTENT_TYPE, reqwest::header::HeaderValue::from_static("application/json"));
+        self.call(reqwest::Method::PUT, endpoint, Some(json_hdrs), Some(json))
+    }
+
     pub fn get(&mut self, endpoint: &String) -> Result<String> {
         self.call::<Empty>(reqwest::Method::GET, endpoint, None, None)
     }
@@ -358,6 +406,13 @@ impl ITRApi {
         let results = self.get(&"/api/CustomersData/GetAllCustomers".to_string()).expect("no results from API call");
         let customers: Vec<Customer> = serde_json::from_str(&results)?;
         Ok(customers)
+    }
+
+    pub fn get_customer(&mut self, cid: &String) -> Result<Customer> {
+        let url = format!("/api/CustomersData/GetOne/?Id={}", cid);
+        let results = self.get(&url).expect("no results from API call");
+        let customer: Customer = serde_json::from_str(&results)?;
+        Ok(customer)
     }
 
     pub fn get_sections(&mut self) -> Result<Vec<Section>> {
@@ -376,5 +431,24 @@ impl ITRApi {
 
     pub fn make_customer(&mut self, c: &MinimalCustomer) -> Result<String> {
         self.post_json(&"/api/CustomersData/Post".to_string(), c)
+    }
+
+    pub fn update_customer(&mut self, c: &Customer) -> Result<String> {
+        self.put_json(&"/api/CustomersData/Put".to_string(), c)
+    }
+
+    pub fn get_transactions(&mut self, ndays: u64) -> Result<Vec<EJTxn>> {
+        let days = Days::new(ndays);
+        let now = Local::now();
+        let then = now.checked_sub_days(days).unwrap();
+        let url = format!("/api/ElectronicJournalData/Get?\
+            $expand=TransactionTenders($select+%3D+TenderCode,LastCardDigits)&\
+            $filter=(TransactionDate+ge+{}+and++TransactionDate+lt+{})+and+(Total+ne+null)&\
+            $orderby=TransactionDate&$select=Id,EmployeeId,TransactionDate,Total,Canceled,CustomerId,CustomerFirstName,CustomerLastName",
+            then.to_rfc3339_opts(SecondsFormat::Secs, true),
+            now.to_rfc3339_opts(SecondsFormat::Secs, true));
+        let r = self.get(&url).expect("Electronic Journal Output");
+        let answer: EJTAnswer = serde_json::from_str(&r)?;
+        Ok(answer.value)
     }
 }

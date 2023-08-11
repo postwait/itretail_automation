@@ -15,6 +15,9 @@ fn main() {
         .arg(Arg::new("log-file").long("log-file").short('l').action(ArgAction::Set).value_name("FILE"))
         .arg(Arg::new("username").long("username").short('u'))
         .arg(Arg::new("password").long("password").short('p'))
+        .subcommand(Command::new("loyalty")
+            .arg(Arg::new("days").long("days").short('d').action(ArgAction::Set).value_name("DAYS").value_parser(clap::value_parser!(u32)).default_value("180"))
+        )
         .subcommand(Command::new("set-plu")
             .arg(Arg::new("upc").required(true))
             .arg(Arg::new("plu").required(true))
@@ -143,6 +146,13 @@ fn main() {
     }
 
     match m.subcommand() {
+        Some(("loyalty", scmd)) => {
+            let r = internal::loyalty::apply_discounts(&mut api, &settings, &scmd);
+            if r.is_err() {
+                error!("Error reading electronic journal: {}", r.err().unwrap());
+                std::process::exit(exitcode::SOFTWARE);
+            }
+        },
         Some(("scale-export", scmd)) => {
             let mut scale_file = internal::cas::Scales{};
             let r = scale_file.send(&mut api, &settings, &scmd);

@@ -1,8 +1,8 @@
 use clap::ArgMatches;
 use fancy_regex::{Regex, RegexBuilder};
+use log::*;
 use rust_xlsxwriter::{Format, Workbook};
 use std::error;
-use log::*;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
@@ -26,10 +26,16 @@ impl LabelFile {
         let qlimit = args.get_one::<f32>("at-least").unwrap();
         let re = args.get_one::<String>("name").unwrap();
         let name_pat = RegexBuilder::new(re).build()?;
-        let vendor_id = args.get_one::<String>("vendor").unwrap().parse::<i32>().unwrap_or(0);
+        let vendor_id = args
+            .get_one::<String>("vendor")
+            .unwrap()
+            .parse::<i32>()
+            .unwrap_or(0);
         let items = items_iter.filter(|x| {
-            let wanted = !x.deleted && upc_pat.is_match(&x.upc).unwrap() && name_pat.is_match(&x.description).unwrap() &&
-            (vendor_id == 0 || (x.vendor_id.is_some() && vendor_id == x.vendor_id.unwrap()));
+            let wanted = !x.deleted
+                && upc_pat.is_match(&x.upc).unwrap()
+                && name_pat.is_match(&x.description).unwrap()
+                && (vendor_id == 0 || (x.vendor_id.is_some() && vendor_id == x.vendor_id.unwrap()));
             wanted && (x.quantity_on_hand.unwrap_or(0.0) > *qlimit)
         });
 

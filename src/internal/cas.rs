@@ -1,23 +1,27 @@
-use anyhow::{anyhow,Result};
-use std::collections::{HashMap,HashSet};
-use std::path::{Path,PathBuf};
-use std::ffi::{CStr, CString};
-use std::{thread,time::{self,Instant},io::{self,Write}};
+use anyhow::{anyhow, Result};
+use chrono::Local;
 use clap::ArgMatches;
 use fancy_regex::Regex;
-use rust_xlsxwriter::{Format, Workbook};
-use chrono::Local;
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use libloading::os::windows::Library;
 use libloading::os::windows::Symbol;
-use process_path::get_executable_path;
-use lazy_static::lazy_static;
-use std::sync::{Arc,Mutex};
 use log::*;
+use process_path::get_executable_path;
+use rust_xlsxwriter::{Format, Workbook};
+use std::collections::{HashMap, HashSet};
+use std::ffi::{CStr, CString};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::{
+    io::{self, Write},
+    thread,
+    time::{self, Instant},
+};
 
 use super::api::{PLUAssignment, ProductData};
 
-type LPSTR = * const std::ffi::c_char;
+type LPSTR = *const std::ffi::c_char;
 type WORD = u16;
 type DWORD = u32;
 type BYTE = u8;
@@ -32,7 +36,7 @@ const TD_LIB_SETTIMEOUT: &[u8; 11] = b"SetTimeout\0";
 const TD_LIB_SENDDATAEX: &[u8; 11] = b"SendDataEx\0";
 
 #[repr(u16)]
-#[derive(Debug,PartialEq,Copy,Clone)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 #[allow(dead_code)]
 pub enum DfAction {
     NOTHING = 0,
@@ -58,12 +62,12 @@ const DF_COMMTYPE_TCPIP: u8 = 1;
 
 #[repr(u8)]
 #[derive(Debug)]
-#[allow(dead_code,non_camel_case_types,non_snake_case)]
+#[allow(dead_code, non_camel_case_types, non_snake_case)]
 enum DfData {
     PING = 7,
     PLU = 10,
     CUSTOM = 27,
-    PLU_V06 = 98
+    PLU_V06 = 98,
 }
 impl From<DfData> for u8 {
     fn from(item: DfData) -> Self {
@@ -74,9 +78,9 @@ const DF_MODULE_TCPIP: i32 = 1;
 
 #[repr(u16)]
 #[derive(Debug)]
-#[allow(dead_code,non_camel_case_types,non_snake_case)]
+#[allow(dead_code, non_camel_case_types, non_snake_case)]
 enum DfScaleType {
-    LP = 100
+    LP = 100,
 }
 impl From<DfScaleType> for u16 {
     fn from(item: DfScaleType) -> Self {
@@ -85,14 +89,14 @@ impl From<DfScaleType> for u16 {
 }
 #[repr(u16)]
 #[derive(Debug)]
-#[allow(dead_code,non_camel_case_types,non_snake_case)]
+#[allow(dead_code, non_camel_case_types, non_snake_case)]
 enum DfScale {
     CL3500 = 3500,
     CL5000 = 5000,
     CL5000JR = 5010,
     CL5200 = 5200,
     CL5500 = 5500,
-    CL7200 = 7200
+    CL7200 = 7200,
 }
 impl From<DfScale> for u16 {
     fn from(item: DfScale) -> Self {
@@ -100,11 +104,11 @@ impl From<DfScale> for u16 {
     }
 }
 #[repr(u8)]
-#[derive(Debug,Copy,Clone)]
-#[allow(dead_code,non_camel_case_types,non_snake_case)]
+#[derive(Debug, Copy, Clone)]
+#[allow(dead_code, non_camel_case_types, non_snake_case)]
 enum DfSendType {
     NORMAL = 1,
-    BROADCAST = 2
+    BROADCAST = 2,
 }
 impl From<DfSendType> for u8 {
     fn from(item: DfSendType) -> Self {
@@ -115,17 +119,16 @@ const DF_TRANS_TIMEOUT: u16 = 3000;
 const DF_TRANS_RETRYCOUNT: u16 = 3;
 const DF_TRANSTYPE_PROC: u8 = 0;
 
-
 #[repr(C)]
-#[allow(non_camel_case_types,non_snake_case)]
+#[allow(non_camel_case_types, non_snake_case)]
 #[derive(Debug)]
 pub struct TD_ST_STATE {
     wdState: DfState,
     lpDescription: LPSTR,
 }
 #[repr(u16)]
-#[derive(Debug,Copy,Clone)]
-#[allow(dead_code,non_camel_case_types,non_snake_case)]
+#[derive(Debug, Copy, Clone)]
+#[allow(dead_code, non_camel_case_types, non_snake_case)]
 enum DfState {
     CONNECT = 1,
     DISCONNECT = 2,
@@ -160,7 +163,7 @@ enum DfState {
 }
 
 #[repr(C)]
-#[allow(non_camel_case_types,non_snake_case)]
+#[allow(non_camel_case_types, non_snake_case)]
 #[derive(Debug)]
 pub struct TD_ST_TRANSDATA_V01 {
     shScaleID: std::ffi::c_short,
@@ -172,11 +175,11 @@ pub struct TD_ST_TRANSDATA_V01 {
     wdScaleModel: DfScale,
     wdAction: DfAction,
     wdDataSize: WORD,
-    pData: * mut std::ffi::c_void,
+    pData: *mut std::ffi::c_void,
 }
 
 #[repr(C)]
-#[allow(non_camel_case_types,non_snake_case)]
+#[allow(non_camel_case_types, non_snake_case)]
 #[derive(Debug)]
 pub struct TD_ST_PINGINFO {
     nComplete: i32,
@@ -188,12 +191,19 @@ pub struct TD_ST_PINGINFO {
 }
 impl Default for TD_ST_PINGINFO {
     fn default() -> TD_ST_PINGINFO {
-        TD_ST_PINGINFO { nComplete: 0, nLoop: 1, nBytes: 1, nTime: 1, nTTL: 255, strIp: [0; 41] }
+        TD_ST_PINGINFO {
+            nComplete: 0,
+            nLoop: 1,
+            nBytes: 1,
+            nTime: 1,
+            nTTL: 255,
+            strIp: [0; 41],
+        }
     }
 }
 
 #[repr(C)]
-#[allow(non_camel_case_types,non_snake_case)]
+#[allow(non_camel_case_types, non_snake_case)]
 #[derive(Debug)]
 pub struct TD_ST_TRANSDATA_V02 {
     shScaleID: std::ffi::c_short,
@@ -205,19 +215,19 @@ pub struct TD_ST_TRANSDATA_V02 {
     wdScaleModel: DfScale,
     wdAction: DfAction,
     wdDataSize: WORD,
-    pData: * mut std::ffi::c_void,
+    pData: *mut std::ffi::c_void,
     dwScaleMainVersion: DWORD,
     dwScaleSubVersion: DWORD,
     dwScaleCountry: DWORD,
     dwScaleDataVersion: DWORD,
     dwReserveVersion: DWORD,
-    pReserve: * mut std::ffi::c_void
+    pReserve: *mut std::ffi::c_void,
 }
 
-type FnProcRecv = extern "C" fn (data: TD_ST_TRANSDATA_V02) -> i32;
+type FnProcRecv = extern "C" fn(data: TD_ST_TRANSDATA_V02) -> i32;
 
 #[repr(C)]
-#[allow(non_camel_case_types,non_snake_case)]
+#[allow(non_camel_case_types, non_snake_case)]
 #[derive(Debug)]
 pub struct TD_ST_CONNECTION_V02 {
     shScaleID: std::ffi::c_short,
@@ -242,11 +252,11 @@ pub struct TD_ST_CONNECTION_V02 {
     dwScaleCountry: DWORD,
     dwScaleDataVersion: DWORD,
     dwReserveVersion: DWORD,
-    pReserve: * mut std::ffi::c_void
+    pReserve: *mut std::ffi::c_void,
 }
 
-#[repr(C,packed)]
-#[allow(non_camel_case_types,non_snake_case)]
+#[repr(C, packed)]
+#[allow(non_camel_case_types, non_snake_case)]
 #[derive(Debug)]
 pub struct TD_ST_PLU_V06 {
     wdDepart: WORD,
@@ -267,87 +277,154 @@ pub struct TD_ST_PLU_V06 {
     wdPieces: WORD,
     btQuatSymbol: BYTE,
     btPriceType: BYTE,
-	dwUnitPrice: DWORD,
-	dwSpecialPrice: DWORD,
-	wdTaxNo: WORD,
-	dwTare: DWORD,
-	wdTareNo: WORD,
-	dwPerTare: DWORD,
-	dwTareLimit: DWORD,
-	wdBarcode1: WORD,
-	wdBarcode2: WORD,
-	wdPicture: WORD,
-	wdProduceDate: WORD,
-	wdPackDate: WORD,
-	wdPackTime: WORD,
-	dwSellDate: DWORD,
-	wdSellTime: WORD,
-	wdCookDate: WORD,
-	wdIngredient: WORD,
-	wdTraceability: WORD,
-	wdBonus: WORD,
-	wdNutrifact: WORD,
-	wdSaleMSG: WORD,
-	wdRefPLUDept: WORD,
-	dwRefPLUNo: DWORD,
-	wdCouplePLUDept: WORD,
-	dwCouplePLUNo: DWORD,
-	wdLinkPLUCount: WORD,
-	wdLinkPLUDept1: WORD,
-	dwLinkPLUNo1: DWORD,
-	wdLinkPLUDept2: WORD,
-	dwLinkPLUNo2: DWORD,
-	btTotalFlag: BYTE,
-	dwTotalCount: DWORD,
-	dwTotalPrice: DWORD,
-	dwTotalWeight: DWORD,
-	chReserve1: [i8; 51],
-	chReserve2: [i8; 51],
-	chReserve3: [i8; 51],
-	wdNo: WORD,
-	wdDirectSize: WORD,
-	chDirectIngredient: [i8; 4097],
-	btPackedDateFlag: BYTE,
-	btPackedTimeFlag: BYTE,
-	btSellByDateFlag: BYTE,
-	btSellByTimeFlag: BYTE,
-	chName4: [i8; 101],
-	chName5: [i8; 101],
-	chName6: [i8; 101],
-	chName7: [i8; 101],
-	chName8: [i8; 101],
-	btNameFontSize1: BYTE,
-	btNameFontSize2: BYTE,
-	btNameFontSize3: BYTE,
-	btNameFontSize4: BYTE,
-	btNameFontSize5: BYTE,
-	btNameFontSize6: BYTE,
-	btNameFontSize7: BYTE,
-	btNameFontSize8: BYTE,
-	btTraceItemFlag: BYTE,
-	btDtIngredientFlag: BYTE,
-	btDtSaleMsgFlag: BYTE,
-	btDtNutriFactFlag: BYTE,
-	btDtOriginFlag: BYTE,
-	chPictureFile: [i8; 50]
+    dwUnitPrice: DWORD,
+    dwSpecialPrice: DWORD,
+    wdTaxNo: WORD,
+    dwTare: DWORD,
+    wdTareNo: WORD,
+    dwPerTare: DWORD,
+    dwTareLimit: DWORD,
+    wdBarcode1: WORD,
+    wdBarcode2: WORD,
+    wdPicture: WORD,
+    wdProduceDate: WORD,
+    wdPackDate: WORD,
+    wdPackTime: WORD,
+    dwSellDate: DWORD,
+    wdSellTime: WORD,
+    wdCookDate: WORD,
+    wdIngredient: WORD,
+    wdTraceability: WORD,
+    wdBonus: WORD,
+    wdNutrifact: WORD,
+    wdSaleMSG: WORD,
+    wdRefPLUDept: WORD,
+    dwRefPLUNo: DWORD,
+    wdCouplePLUDept: WORD,
+    dwCouplePLUNo: DWORD,
+    wdLinkPLUCount: WORD,
+    wdLinkPLUDept1: WORD,
+    dwLinkPLUNo1: DWORD,
+    wdLinkPLUDept2: WORD,
+    dwLinkPLUNo2: DWORD,
+    btTotalFlag: BYTE,
+    dwTotalCount: DWORD,
+    dwTotalPrice: DWORD,
+    dwTotalWeight: DWORD,
+    chReserve1: [i8; 51],
+    chReserve2: [i8; 51],
+    chReserve3: [i8; 51],
+    wdNo: WORD,
+    wdDirectSize: WORD,
+    chDirectIngredient: [i8; 4097],
+    btPackedDateFlag: BYTE,
+    btPackedTimeFlag: BYTE,
+    btSellByDateFlag: BYTE,
+    btSellByTimeFlag: BYTE,
+    chName4: [i8; 101],
+    chName5: [i8; 101],
+    chName6: [i8; 101],
+    chName7: [i8; 101],
+    chName8: [i8; 101],
+    btNameFontSize1: BYTE,
+    btNameFontSize2: BYTE,
+    btNameFontSize3: BYTE,
+    btNameFontSize4: BYTE,
+    btNameFontSize5: BYTE,
+    btNameFontSize6: BYTE,
+    btNameFontSize7: BYTE,
+    btNameFontSize8: BYTE,
+    btTraceItemFlag: BYTE,
+    btDtIngredientFlag: BYTE,
+    btDtSaleMsgFlag: BYTE,
+    btDtNutriFactFlag: BYTE,
+    btDtOriginFlag: BYTE,
+    chPictureFile: [i8; 50],
 }
 impl Default for TD_ST_PLU_V06 {
     fn default() -> TD_ST_PLU_V06 {
         TD_ST_PLU_V06 {
-            wdDepart: 0, dwPLU: 0, btPLUType: 0, chName1: [0; 101], chName2: [0; 101], chName3: [0; 101],
-            wdGroup: 0, chBarcodeEx: [0; 101], wdLabel1: 0, wdLabel2: 0, wdOrigin: 0, btWeightUnit: 0, dwFixWeight: 0,
-            chPrefix: [0; 11], dwItemCode: 0, wdPieces: 0, btQuatSymbol: 0, btPriceType: 0, dwUnitPrice: 0, dwSpecialPrice: 0,
-            wdTaxNo: 0, dwTare: 0, dwPerTare: 0, dwTareLimit: 0, wdBarcode1: 0, wdTareNo: 0, wdBarcode2: 0,
-            wdPicture: 0, wdProduceDate: 0, wdPackDate:0, wdPackTime: 0, wdSellTime: 0, dwSellDate: 0, wdCookDate: 0,
-            wdIngredient: 0, wdBonus: 0, wdTraceability: 0, wdNutrifact: 0, wdSaleMSG: 0, wdRefPLUDept: 0, dwRefPLUNo: 0,
-            wdCouplePLUDept: 0, dwCouplePLUNo: 0, wdLinkPLUCount: 0, wdLinkPLUDept1: 0, dwLinkPLUNo1: 0, wdLinkPLUDept2: 0,
-            dwLinkPLUNo2: 0, btTotalFlag: 0, dwTotalCount: 0, dwTotalPrice: 0, dwTotalWeight: 0, chReserve1: [0; 51],
-            chReserve2: [0; 51], chReserve3: [0; 51], wdNo: 0, wdDirectSize: 0, chDirectIngredient: [0; 4097],
-            btPackedDateFlag: 0, btPackedTimeFlag: 0, btSellByDateFlag: 0, btSellByTimeFlag: 0, chName4: [0; 101],
-            chName5: [0; 101], chName6: [0; 101], chName7: [0; 101], chName8: [0; 101], btNameFontSize1: 0,
-            btNameFontSize2: 0, btNameFontSize3: 0, btNameFontSize4: 0, btNameFontSize5: 0, btNameFontSize6: 0,
-            btNameFontSize7: 0, btNameFontSize8: 0, btTraceItemFlag: 0, btDtIngredientFlag: 0, btDtSaleMsgFlag: 0,
-            btDtNutriFactFlag: 0, btDtOriginFlag: 0, chPictureFile: [0; 50]
+            wdDepart: 0,
+            dwPLU: 0,
+            btPLUType: 0,
+            chName1: [0; 101],
+            chName2: [0; 101],
+            chName3: [0; 101],
+            wdGroup: 0,
+            chBarcodeEx: [0; 101],
+            wdLabel1: 0,
+            wdLabel2: 0,
+            wdOrigin: 0,
+            btWeightUnit: 0,
+            dwFixWeight: 0,
+            chPrefix: [0; 11],
+            dwItemCode: 0,
+            wdPieces: 0,
+            btQuatSymbol: 0,
+            btPriceType: 0,
+            dwUnitPrice: 0,
+            dwSpecialPrice: 0,
+            wdTaxNo: 0,
+            dwTare: 0,
+            dwPerTare: 0,
+            dwTareLimit: 0,
+            wdBarcode1: 0,
+            wdTareNo: 0,
+            wdBarcode2: 0,
+            wdPicture: 0,
+            wdProduceDate: 0,
+            wdPackDate: 0,
+            wdPackTime: 0,
+            wdSellTime: 0,
+            dwSellDate: 0,
+            wdCookDate: 0,
+            wdIngredient: 0,
+            wdBonus: 0,
+            wdTraceability: 0,
+            wdNutrifact: 0,
+            wdSaleMSG: 0,
+            wdRefPLUDept: 0,
+            dwRefPLUNo: 0,
+            wdCouplePLUDept: 0,
+            dwCouplePLUNo: 0,
+            wdLinkPLUCount: 0,
+            wdLinkPLUDept1: 0,
+            dwLinkPLUNo1: 0,
+            wdLinkPLUDept2: 0,
+            dwLinkPLUNo2: 0,
+            btTotalFlag: 0,
+            dwTotalCount: 0,
+            dwTotalPrice: 0,
+            dwTotalWeight: 0,
+            chReserve1: [0; 51],
+            chReserve2: [0; 51],
+            chReserve3: [0; 51],
+            wdNo: 0,
+            wdDirectSize: 0,
+            chDirectIngredient: [0; 4097],
+            btPackedDateFlag: 0,
+            btPackedTimeFlag: 0,
+            btSellByDateFlag: 0,
+            btSellByTimeFlag: 0,
+            chName4: [0; 101],
+            chName5: [0; 101],
+            chName6: [0; 101],
+            chName7: [0; 101],
+            chName8: [0; 101],
+            btNameFontSize1: 0,
+            btNameFontSize2: 0,
+            btNameFontSize3: 0,
+            btNameFontSize4: 0,
+            btNameFontSize5: 0,
+            btNameFontSize6: 0,
+            btNameFontSize7: 0,
+            btNameFontSize8: 0,
+            btTraceItemFlag: 0,
+            btDtIngredientFlag: 0,
+            btDtSaleMsgFlag: 0,
+            btDtNutriFactFlag: 0,
+            btDtOriginFlag: 0,
+            chPictureFile: [0; 50],
         }
     }
 }
@@ -359,7 +436,11 @@ const INGREDIENT_LABEL_ID: u16 = 62;
 fn jam(string: &String, out: &mut [i8]) {
     let bs = string.as_bytes();
     let bsr = bs.as_ptr() as *const i8;
-    let copylen = if bs.len() < out.len() { bs.len() } else { out.len() - 1 };
+    let copylen = if bs.len() < out.len() {
+        bs.len()
+    } else {
+        out.len() - 1
+    };
     unsafe { std::ptr::copy(bsr, out.as_mut_ptr(), copylen) };
 }
 impl From<&ProductData> for TD_ST_PLU_V06 {
@@ -369,7 +450,11 @@ impl From<&ProductData> for TD_ST_PLU_V06 {
         cp.dwPLU = p.plu.as_ref().unwrap().parse::<DWORD>().unwrap();
         jam(&p.description, &mut cp.chName1);
         let itemcode_str = p.upc.get(3..8).unwrap();
-        let itemcode = itemcode_str.trim_start_matches('0').parse::<u32>().or::<u32>(Ok(0)).unwrap();
+        let itemcode = itemcode_str
+            .trim_start_matches('0')
+            .parse::<u32>()
+            .or::<u32>(Ok(0))
+            .unwrap();
         cp.dwItemCode = itemcode;
         cp.dwUnitPrice = (p.normal_price * 100.0) as u32;
         cp.btWeightUnit = 1; // by 1 lb
@@ -386,12 +471,12 @@ impl From<&ProductData> for TD_ST_PLU_V06 {
     }
 }
 
-type FnSetCommLibrary = Symbol<unsafe extern fn(i32, LPSTR, i32) -> i32>;
-type FnAddInterpreter = Symbol<unsafe extern fn(WORD, WORD, LPSTR) -> i32>;
-type FnAddConnectionEx = Symbol<unsafe extern fn(TD_ST_CONNECTION_V02) -> i32>;
-type FnScale = Symbol<unsafe extern fn(LPSTR, std::ffi::c_short) -> i32>;
-type FnScaleInt = Symbol<unsafe extern fn(LPSTR, std::ffi::c_short, i32) -> i32>;
-type FnSendDataEx = Symbol<unsafe extern fn(TD_ST_TRANSDATA_V02) -> i32>;
+type FnSetCommLibrary = Symbol<unsafe extern "C" fn(i32, LPSTR, i32) -> i32>;
+type FnAddInterpreter = Symbol<unsafe extern "C" fn(WORD, WORD, LPSTR) -> i32>;
+type FnAddConnectionEx = Symbol<unsafe extern "C" fn(TD_ST_CONNECTION_V02) -> i32>;
+type FnScale = Symbol<unsafe extern "C" fn(LPSTR, std::ffi::c_short) -> i32>;
+type FnScaleInt = Symbol<unsafe extern "C" fn(LPSTR, std::ffi::c_short, i32) -> i32>;
+type FnSendDataEx = Symbol<unsafe extern "C" fn(TD_ST_TRANSDATA_V02) -> i32>;
 
 #[derive(Debug)]
 pub struct Scale {
@@ -405,7 +490,7 @@ pub struct Scale {
     plus_downloaded: u32,
     product_idx: u32,
     products: Arc<Vec<ProductData>>,
-    notified: bool
+    notified: bool,
 }
 
 impl Scale {
@@ -421,12 +506,12 @@ impl Scale {
             plus_downloaded: 0,
             product_idx: 0,
             products: Arc::new(vec![]),
-            notified: false
+            notified: false,
         }
     }
     pub fn complete(&self) -> bool {
-        (self.plus_downloaded as usize == self.products.len()) &&
-        (self.should_delete == self.delete_completed)
+        (self.plus_downloaded as usize == self.products.len())
+            && (self.should_delete == self.delete_completed)
     }
     pub fn status_str(&self) -> String {
         if self.complete() {
@@ -461,13 +546,13 @@ pub fn get_lib(dll: &str) -> Result<(Library, PathBuf), libloading::Error> {
     dllpath.push(dll);
     let lib = unsafe { Library::new(dllpath.as_path()) };
     if lib.is_ok() {
-        return Ok((lib.unwrap(), dllpath))
+        return Ok((lib.unwrap(), dllpath));
     }
     dllpath = PathBuf::from("C:\\CAS");
     dllpath.push(dll);
     let lib = unsafe { Library::new(dllpath.as_path()) };
     if lib.is_ok() {
-        return Ok((lib.unwrap(), dllpath))
+        return Ok((lib.unwrap(), dllpath));
     }
     return Err(lib.err().unwrap());
 }
@@ -487,8 +572,8 @@ fn cas_api_init() -> ScaleAPI {
         let disconnect: FnScale = casprtc_lib.get(TD_LIB_DISCONNECT).unwrap();
         let set_timeout: FnScaleInt = casprtc_lib.get(TD_LIB_SETTIMEOUT).unwrap();
         let senddata_ex: FnSendDataEx = casprtc_lib.get(TD_LIB_SENDDATAEX).unwrap();
-        
-        let sf = ScaleAPI{
+
+        let sf = ScaleAPI {
             lib_prtc: casprtc_lib,
             cas_set_comm_library: set_comm_library,
             cas_add_interpreter: add_interpreter,
@@ -497,9 +582,9 @@ fn cas_api_init() -> ScaleAPI {
             cas_disconnect: disconnect,
             cas_set_timeout: set_timeout,
             cas_senddata_ex: senddata_ex,
-            scales: HashMap::new()
+            scales: HashMap::new(),
         };
-        let init: Symbol<extern "C" fn (i32) -> i32> = sf.lib_prtc.get(b"Initialize\0").unwrap();
+        let init: Symbol<extern "C" fn(i32) -> i32> = sf.lib_prtc.get(b"Initialize\0").unwrap();
         let rc = init(0);
         debug!("CASPRTC init -> {}", rc);
 
@@ -514,15 +599,23 @@ fn cas_api_init() -> ScaleAPI {
         debug!("TCPIP comms online.");
 
         for (scale_model, interp) in [
-            (DfScale::CL3500, CL_INTERP.to_vec()), (DfScale::CL5000, CL_INTERP.to_vec()),
-            (DfScale::CL5200, CL_INTERP.to_vec()), (DfScale::CL5500, CL_INTERP.to_vec()),
-            (DfScale::CL7200, CL_INTERP.to_vec()), (DfScale::CL5000JR, CL_JRINTERP.to_vec())] {
+            (DfScale::CL3500, CL_INTERP.to_vec()),
+            (DfScale::CL5000, CL_INTERP.to_vec()),
+            (DfScale::CL5200, CL_INTERP.to_vec()),
+            (DfScale::CL5500, CL_INTERP.to_vec()),
+            (DfScale::CL7200, CL_INTERP.to_vec()),
+            (DfScale::CL5000JR, CL_JRINTERP.to_vec()),
+        ] {
             let mut dll = PathBuf::from(casprtc_path.parent().unwrap());
             dll.push(Path::new(&String::from_utf8(interp.to_vec()).unwrap()));
             let dll_str = dll.as_path().to_str().unwrap();
             let dll_cstring = dll_str.as_bytes();
             let out = format!("{:?}", scale_model);
-            let ret = (sf.cas_add_interpreter)(DfScaleType::LP.into(), scale_model.into(), dll_cstring.as_ptr() as *const i8);
+            let ret = (sf.cas_add_interpreter)(
+                DfScaleType::LP.into(),
+                scale_model.into(),
+                dll_cstring.as_ptr() as *const i8,
+            );
             if ret == 0 {
                 debug!("Add Interpreter {:?}: {}", out, ret);
             }
@@ -537,8 +630,8 @@ lazy_static! {
 }
 
 fn wrong_range(item: &super::api::ProductData, plu: u16) -> bool {
-    (item.description.starts_with("(I)") && plu >= 1000) ||
-    (!item.description.starts_with("(I)") && plu < 1000)
+    (item.description.starts_with("(I)") && plu >= 1000)
+        || (!item.description.starts_with("(I)") && plu < 1000)
 }
 fn next_plu(hs: &mut HashSet<u16>, item: &super::api::ProductData) -> u16 {
     let mut probe: u16 = if item.description.starts_with("(I)") {
@@ -552,7 +645,7 @@ fn next_plu(hs: &mut HashSet<u16>, item: &super::api::ProductData) -> u16 {
     hs.insert(probe);
     probe
 }
-pub extern "C" fn recvproc (data: TD_ST_TRANSDATA_V02) -> i32 { 
+pub extern "C" fn recvproc(data: TD_ST_TRANSDATA_V02) -> i32 {
     let ip = lpstr_to_strref(data.lpIP); // as * const i8).to_str().unwrap() };
     let cas = DLLAPI.lock().unwrap();
     let mut scale = cas.scales.get(&ip).unwrap().lock().unwrap();
@@ -569,7 +662,7 @@ pub extern "C" fn recvproc (data: TD_ST_TRANSDATA_V02) -> i32 {
                     match rc {
                         Ok(_r) => {
                             scale.product_idx += 1;
-                        },
+                        }
                         Err(e) => {
                             error!("{} errored: {}", scale.ip, e);
                             cas.disconnect_scale(&scale);
@@ -577,7 +670,7 @@ pub extern "C" fn recvproc (data: TD_ST_TRANSDATA_V02) -> i32 {
                     }
                 }
             }
-        },
+        }
         DfAction::DOWNLOAD => {
             debug!("RECV: {:?}", data);
             scale.plus_downloaded += 1;
@@ -585,13 +678,13 @@ pub extern "C" fn recvproc (data: TD_ST_TRANSDATA_V02) -> i32 {
             match rc {
                 Ok(_r) => {
                     scale.product_idx += 1;
-                },
+                }
                 Err(e) => {
                     error!("{} errored: {}", scale.ip, e);
                     cas.disconnect_scale(&scale);
                 }
             }
-        },
+        }
         _ => {
             debug!("RECV: {:?}", data);
         }
@@ -605,7 +698,7 @@ pub fn lpstr_to_strref(ptr: *const i8) -> String {
         unsafe { CStr::from_ptr(ptr).to_str().unwrap() }.to_string()
     }
 }
-pub extern "C" fn stateproc (data: TD_ST_TRANSDATA_V02) -> i32 {
+pub extern "C" fn stateproc(data: TD_ST_TRANSDATA_V02) -> i32 {
     let ip = lpstr_to_strref(data.lpIP); // as * const i8).to_str().unwrap() };
     let (state, description) = unsafe {
         let pdata = data.pData as *const TD_ST_STATE;
@@ -616,7 +709,10 @@ pub extern "C" fn stateproc (data: TD_ST_TRANSDATA_V02) -> i32 {
     let mut scale = {
         let wrapper = cas.scales.get(&ip);
         if wrapper.is_none() {
-            warn!("State message {:?}: {} from unknown scale {}", state, description, ip);
+            warn!(
+                "State message {:?}: {} from unknown scale {}",
+                state, description, ip
+            );
             return 0;
         }
         wrapper.unwrap().lock().unwrap()
@@ -634,7 +730,7 @@ pub extern "C" fn stateproc (data: TD_ST_TRANSDATA_V02) -> i32 {
                         if r {
                             scale.product_idx = scale.product_idx + 1;
                         }
-                    },
+                    }
                     Err(e) => {
                         error!("Scale {}: {}", scale.ip, e);
                         cas.disconnect_scale(&scale);
@@ -642,7 +738,7 @@ pub extern "C" fn stateproc (data: TD_ST_TRANSDATA_V02) -> i32 {
                 }
             }
             return 1;
-        },
+        }
         DfState::RECEIVETIMEOVER => {
             return 1;
         }
@@ -654,7 +750,15 @@ pub extern "C" fn stateproc (data: TD_ST_TRANSDATA_V02) -> i32 {
 }
 
 impl ScaleAPI {
-    fn make_transdata(&self, ip: *const i8, idx: std::ffi::c_short, action: DfAction, datatype: DfData, data: *mut std::ffi::c_void, data_size: usize) -> TD_ST_TRANSDATA_V02 {
+    fn make_transdata(
+        &self,
+        ip: *const i8,
+        idx: std::ffi::c_short,
+        action: DfAction,
+        datatype: DfData,
+        data: *mut std::ffi::c_void,
+        data_size: usize,
+    ) -> TD_ST_TRANSDATA_V02 {
         TD_ST_TRANSDATA_V02 {
             shScaleID: idx,
             lpIP: ip,
@@ -671,7 +775,7 @@ impl ScaleAPI {
             dwScaleCountry: 2,
             dwScaleDataVersion: 20,
             dwReserveVersion: 0,
-            pReserve: std::ptr::null_mut()
+            pReserve: std::ptr::null_mut(),
         }
     }
     pub fn delete_plus(&self, scale: &mut Scale) -> bool {
@@ -685,7 +789,14 @@ impl ScaleAPI {
         }
         let lp_ip = CString::new(scale.ip.to_string()).unwrap();
         let td = {
-            self.make_transdata(lp_ip.as_ptr(), scale.idx, DfAction::DELETEALL, DfData::PLU_V06, std::ptr::null_mut(), 0)
+            self.make_transdata(
+                lp_ip.as_ptr(),
+                scale.idx,
+                DfAction::DELETEALL,
+                DfData::PLU_V06,
+                std::ptr::null_mut(),
+                0,
+            )
         };
         unsafe {
             debug!("SEND {} <- {:?}", lpstr_to_strref(td.lpIP), td);
@@ -697,23 +808,38 @@ impl ScaleAPI {
     }
     pub fn push_plu(&self, scale: &mut Scale) -> Result<bool> {
         if scale.product_idx as usize >= scale.products.len() {
-            return Ok(false)
+            return Ok(false);
         }
         match scale.state {
             DfState::CONNECT => {}
             _ => {
-                return Err(anyhow!("Scale {} in unexpected state: {:?}", scale.ip, scale.state));
+                return Err(anyhow!(
+                    "Scale {} in unexpected state: {:?}",
+                    scale.ip,
+                    scale.state
+                ));
             }
         }
         let lp_ip = CString::new(scale.ip.to_string()).unwrap();
         let mut td = {
-            self.make_transdata(lp_ip.as_ptr(), scale.idx, DfAction::DOWNLOAD, DfData::PLU_V06, std::ptr::null_mut(), 0)
+            self.make_transdata(
+                lp_ip.as_ptr(),
+                scale.idx,
+                DfAction::DOWNLOAD,
+                DfData::PLU_V06,
+                std::ptr::null_mut(),
+                0,
+            )
         };
 
         let item = &scale.products[scale.product_idx as usize];
         let mut plu: TD_ST_PLU_V06 = item.into();
         let dw_plu = std::ptr::addr_of!(plu.dwPLU);
-        info!("Pushing PLU {} to {}", unsafe { std::ptr::read_unaligned(dw_plu) }, scale.ip);
+        info!(
+            "Pushing PLU {} to {}",
+            unsafe { std::ptr::read_unaligned(dw_plu) },
+            scale.ip
+        );
         td.wdDataSize = std::mem::size_of::<TD_ST_PLU_V06>() as u16;
         td.pData = std::ptr::addr_of_mut!(plu) as *mut std::ffi::c_void;
 
@@ -753,7 +879,7 @@ impl ScaleAPI {
             dwScaleCountry: 2,
             dwScaleDataVersion: 20,
             dwReserveVersion: 0,
-            pReserve: std::ptr::null_mut()
+            pReserve: std::ptr::null_mut(),
         };
         let ret = unsafe { (self.cas_add_connection_ex)(td) };
         if ret != 0 {
@@ -761,7 +887,8 @@ impl ScaleAPI {
             let mut scale = Scale::new(ip.to_string());
             scale.idx = idx;
             scale.should_delete = should_delete;
-            self.scales.insert(ip.to_string(), Arc::new(Mutex::new(scale)));
+            self.scales
+                .insert(ip.to_string(), Arc::new(Mutex::new(scale)));
         } else {
             warn!("Adding scale connection failed: {}", ip.to_string());
             return false;
@@ -791,42 +918,53 @@ impl ScaleAPI {
 
     pub fn disconnect_scale(&self, scale: &Scale) -> bool {
         let lp_ip = CString::new(scale.ip.to_string()).unwrap();
-        let ret = unsafe {(self.cas_disconnect)(lp_ip.as_ptr(), scale.idx) };
+        let ret = unsafe { (self.cas_disconnect)(lp_ip.as_ptr(), scale.idx) };
         if ret != 0 {
-            return true
+            return true;
         } else {
             error!("Connect to scale failed: {}", scale.ip.to_string());
         }
         false
     }
     pub fn connect_scale(&self, scale_ip: &String) -> bool {
-        let scale = self.scales.get(&scale_ip.to_string()).unwrap().lock().unwrap();
+        let scale = self
+            .scales
+            .get(&scale_ip.to_string())
+            .unwrap()
+            .lock()
+            .unwrap();
         let lp_ip = CString::new(scale.ip.to_string()).unwrap();
-        let ret = unsafe {(self.cas_connect)(lp_ip.as_ptr(), scale.idx) };
+        let ret = unsafe { (self.cas_connect)(lp_ip.as_ptr(), scale.idx) };
         if ret != 0 {
-            return true
+            return true;
         } else {
             error!("Connect to scale failed: {}", scale.ip.to_string());
         }
         false
     }
-
 }
 
 // TBC
-pub struct Scales {
-}
+pub struct Scales {}
 
 impl Scales {
-    pub fn filtered_items(&mut self, api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<Vec<super::api::ProductData>> {
+    pub fn filtered_items(
+        &mut self,
+        api: &mut super::api::ITRApi,
+        args: &ArgMatches,
+    ) -> Result<Vec<super::api::ProductData>> {
         let dump_internal = !args.get_flag("external");
         let re = args.get_one::<String>("upc").unwrap();
         let upc_pat = Regex::new(re)?;
-        let filter = |x: &super::api::ProductData| { !x.deleted && upc_pat.is_match(&x.upc).unwrap() };
+        let filter = |x: &super::api::ProductData| !x.deleted && upc_pat.is_match(&x.upc).unwrap();
 
-        let json = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
+        let json = api
+            .get(&"/api/ProductsData/GetAllProducts".to_string())
+            .expect("no results from API call");
         let mut items: Vec<super::api::ProductData> = serde_json::from_str(&json)?;
-        items = items.into_iter().filter(filter)
+        items = items
+            .into_iter()
+            .filter(filter)
             .sorted_by(|x, y| (&x.description).cmp(&y.description))
             .sorted_by_key(|x| x.section_id.unwrap_or(0))
             .collect::<Vec<super::api::ProductData>>();
@@ -844,17 +982,25 @@ impl Scales {
             if item.plu.is_some() {
                 let plu = item.plu.as_ref().unwrap().parse::<u16>().unwrap();
                 if seen_plu.contains(&plu) || wrong_range(&item, plu) {
-                     let new_plu = next_plu(&mut existing_plu, &item);
-                     info!("PLU assigned {} bad previous was {} - {}", new_plu, plu, item.description);
-                     plu_assignment.push(PLUAssignment{ upc: item.upc.to_string(), plu: new_plu });
+                    let new_plu = next_plu(&mut existing_plu, &item);
+                    info!(
+                        "PLU assigned {} bad previous was {} - {}",
+                        new_plu, plu, item.description
+                    );
+                    plu_assignment.push(PLUAssignment {
+                        upc: item.upc.to_string(),
+                        plu: new_plu,
+                    });
                     seen_plu.insert(new_plu);
                 } else {
                     seen_plu.insert(plu);
                 }
-            }
-            else {
+            } else {
                 let new_plu = next_plu(&mut existing_plu, &item);
-                plu_assignment.push(PLUAssignment{ upc: item.upc.to_string(), plu: new_plu });
+                plu_assignment.push(PLUAssignment {
+                    upc: item.upc.to_string(),
+                    plu: new_plu,
+                });
                 info!("PLU assigned {} - {}", new_plu, item.description);
                 seen_plu.insert(new_plu);
             }
@@ -864,23 +1010,45 @@ impl Scales {
             if r.is_err() {
                 return Err(r.err().unwrap());
             }
-            let json = api.get(&"/api/ProductsData/GetAllProducts".to_string()).expect("no results from API call");
+            let json = api
+                .get(&"/api/ProductsData/GetAllProducts".to_string())
+                .expect("no results from API call");
             items = serde_json::from_str(&json)?;
-            items = items.into_iter().filter(filter).sorted_by_key(|x| x.section_id.unwrap_or(0)).collect::<Vec<super::api::ProductData>>();
+            items = items
+                .into_iter()
+                .filter(filter)
+                .sorted_by_key(|x| x.section_id.unwrap_or(0))
+                .collect::<Vec<super::api::ProductData>>();
         }
 
-        items = items.into_iter().filter(|item| {
-            if item.plu.is_none() { return false }
-            let plu = item.plu.as_ref().unwrap().parse::<u16>();
-            if plu.is_err() { return false }
-            if !dump_internal && plu.unwrap() < 1000 { return false }
-            if item.upc.get(3..8).is_none() { return false }
-            true
-        }).collect::<Vec<super::api::ProductData>>();
+        items = items
+            .into_iter()
+            .filter(|item| {
+                if item.plu.is_none() {
+                    return false;
+                }
+                let plu = item.plu.as_ref().unwrap().parse::<u16>();
+                if plu.is_err() {
+                    return false;
+                }
+                if !dump_internal && plu.unwrap() < 1000 {
+                    return false;
+                }
+                if item.upc.get(3..8).is_none() {
+                    return false;
+                }
+                true
+            })
+            .collect::<Vec<super::api::ProductData>>();
         Ok(items)
     }
 
-    pub fn send(&mut self, api: &mut super::api::ITRApi, settings: &super::settings::Settings, args: &ArgMatches) -> Result<()> {
+    pub fn send(
+        &mut self,
+        api: &mut super::api::ITRApi,
+        settings: &super::settings::Settings,
+        args: &ArgMatches,
+    ) -> Result<()> {
         let progress = args.get_flag("progress");
         let delete_plus = args.get_flag("wipe");
         let weighed_items = self.filtered_items(api, args)?;
@@ -888,20 +1056,22 @@ impl Scales {
         self.build_plu_xlsx(api, &weighed_items, plufile, &args)?;
         match args.get_one::<String>("scale-file") {
             Some(scalefile) => self.build_scale_xlsx(&weighed_items, scalefile)?,
-            _ => ()
+            _ => (),
         }
         let weighed_items_ref = Arc::new(weighed_items);
         let timeout = match args.get_one::<u32>("timeout-seconds") {
             Some(secs) => secs,
-            None => &settings.scales.timeout_seconds
+            None => &settings.scales.timeout_seconds,
         };
         let scales: Vec<&String> = match args.get_many::<String>("scale") {
             Some(set) => set.collect::<Vec<_>>().into(),
-            None => if args.get_flag("no-scales") {
-                vec![]
-            } else {
-                settings.scales.addresses.iter().collect::<Vec<_>>().into()
-            },
+            None => {
+                if args.get_flag("no-scales") {
+                    vec![]
+                } else {
+                    settings.scales.addresses.iter().collect::<Vec<_>>().into()
+                }
+            }
         };
         if scales.len() > 0 {
             let mut idx: std::ffi::c_short = 1;
@@ -916,7 +1086,7 @@ impl Scales {
             }
             let ips: Vec<String> = {
                 let cas = DLLAPI.lock().unwrap();
-                cas.scales.keys().map(|k| {k.to_string()}).collect()
+                cas.scales.keys().map(|k| k.to_string()).collect()
             };
 
             for scale_ip in ips.iter() {
@@ -959,7 +1129,10 @@ impl Scales {
                     break;
                 }
                 if *timeout != 0 && start.elapsed().as_secs() as u32 > *timeout {
-                    error!("Operation timed out after {} seconds.", start.elapsed().as_secs());
+                    error!(
+                        "Operation timed out after {} seconds.",
+                        start.elapsed().as_secs()
+                    );
                     return Err(anyhow!("timeout"));
                 }
                 thread::sleep(time::Duration::from_secs(1));
@@ -968,15 +1141,24 @@ impl Scales {
         Ok(())
     }
 
-    pub fn build_plu_xlsx(&mut self, api: &mut super::api::ITRApi, weighed_items: &Vec<ProductData>, filename: &String, args: &ArgMatches) -> Result<()> {
+    pub fn build_plu_xlsx(
+        &mut self,
+        api: &mut super::api::ITRApi,
+        weighed_items: &Vec<ProductData>,
+        filename: &String,
+        args: &ArgMatches,
+    ) -> Result<()> {
         let qlimit = args.get_one::<f32>("at-least").unwrap();
         let by_section = args.get_flag("by-section");
         let mut workbook = Workbook::new();
         let bold_format = Format::new().set_bold();
         let decimal_format = Format::new().set_num_format("0.00");
 
-        let sections: HashMap<i32, String> = api.get_sections()?.iter().map(|s| (s.id as i32, s.name.to_owned())).collect();
-
+        let sections: HashMap<i32, String> = api
+            .get_sections()?
+            .iter()
+            .map(|s| (s.id as i32, s.name.to_owned()))
+            .collect();
 
         const FIELDS: [&str; 3] = ["PLU", "Name", "Price"];
 
@@ -991,21 +1173,32 @@ impl Scales {
             }
             let section_id = match by_section {
                 true => item.section_id.unwrap_or(-1),
-                false => 0
+                false => 0,
             };
             let unknown_section: String = match by_section {
                 true => String::from("Unknown"),
-                false => String::from("Products")
+                false => String::from("Products"),
             };
             let section_name = sections.get(&section_id).unwrap_or(&unknown_section);
             let section = match sheets.get_mut(&section_id) {
                 Some(sheet) => sheet,
                 None => {
                     let worksheet = workbook.add_worksheet().set_name(section_name)?;
-                    sheets.insert(section_id, XSection{ name: worksheet.name(), row: 1});
+                    sheets.insert(
+                        section_id,
+                        XSection {
+                            name: worksheet.name(),
+                            row: 1,
+                        },
+                    );
                     let section = sheets.get_mut(&section_id).unwrap();
                     for idx in 0..FIELDS.len() {
-                        worksheet.write_with_format(0, idx.try_into().unwrap(), FIELDS[idx], &bold_format)?;
+                        worksheet.write_with_format(
+                            0,
+                            idx.try_into().unwrap(),
+                            FIELDS[idx],
+                            &bold_format,
+                        )?;
                     }
                     section
                 }
@@ -1014,7 +1207,12 @@ impl Scales {
             let plu = item.plu.as_ref().unwrap().parse::<u16>().unwrap();
             worksheet.write_number(section.row, 0, plu)?;
             worksheet.write_string(section.row, 1, &item.description)?;
-            worksheet.write_number_with_format(section.row, 2, item.normal_price, &decimal_format)?;
+            worksheet.write_number_with_format(
+                section.row,
+                2,
+                item.normal_price,
+                &decimal_format,
+            )?;
             section.row += 1;
         }
 
@@ -1022,12 +1220,32 @@ impl Scales {
 
         Ok(())
     }
-    pub fn build_scale_xlsx(&mut self, weighed_items: &Vec<ProductData>, filename: &String) -> Result<()> {
-        const FIELDS : [&str; 19] = ["Department No", "PLU No", "Name1", "Name2", "Itemcode",
-                             "Unit Price", "Origin No", "Label No"," Category No",
-                             "Direct Ingredient", "Sell By Time", "Sell By Date",
-                             "Packed Date", "Group No", "Unit Weight", "Nutrifact No",
-                             "PLU Type", "Packed Time", "Update Date"];
+    pub fn build_scale_xlsx(
+        &mut self,
+        weighed_items: &Vec<ProductData>,
+        filename: &String,
+    ) -> Result<()> {
+        const FIELDS: [&str; 19] = [
+            "Department No",
+            "PLU No",
+            "Name1",
+            "Name2",
+            "Itemcode",
+            "Unit Price",
+            "Origin No",
+            "Label No",
+            " Category No",
+            "Direct Ingredient",
+            "Sell By Time",
+            "Sell By Date",
+            "Packed Date",
+            "Group No",
+            "Unit Weight",
+            "Nutrifact No",
+            "PLU Type",
+            "Packed Time",
+            "Update Date",
+        ];
 
         let mut workbook = Workbook::new();
         let bold_format = Format::new().set_bold();
@@ -1049,8 +1267,11 @@ impl Scales {
             worksheet.write_string(row, 2, &item.description)?;
             // 3 Name2 (blank)
             let itemcode_str = item.upc.get(3..8).unwrap();
-            let itemcode = itemcode_str.trim_start_matches('0').parse::<u32>().or::<u32>(Ok(0)).unwrap();
-            
+            let itemcode = itemcode_str
+                .trim_start_matches('0')
+                .parse::<u32>()
+                .or::<u32>(Ok(0))
+                .unwrap();
 
             worksheet.write_number(row, 4, itemcode)?;
             worksheet.write_number_with_format(row, 5, item.normal_price, &decimal_format)?;
@@ -1075,7 +1296,10 @@ impl Scales {
             worksheet.write_with_format(row, 18, &date, &date_format)?;
 
             row = row + 1;
-            info!("Writing: [{}] {} : {} : {}", plu, item.upc, item.description, item.normal_price);
+            info!(
+                "Writing: [{}] {} : {} : {}",
+                plu, item.upc, item.description, item.normal_price
+            );
         }
 
         workbook.save(filename)?;

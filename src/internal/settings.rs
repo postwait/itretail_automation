@@ -37,9 +37,7 @@ impl Settings {
         let mut token_filepath = PathBuf::new();
         match home::home_dir() {
             Some(path) => token_filepath.push(path),
-            None => {
-                return Err(ConfigError::Message("unknown home directory".to_owned()))
-            }
+            None => return Err(ConfigError::Message("unknown home directory".to_owned())),
         };
         token_filepath.push(".itretail");
         if !token_filepath.is_dir() {
@@ -51,10 +49,7 @@ impl Settings {
         let basepath = token_filepath.to_str().unwrap();
 
         let s = Config::builder()
-            .add_source(
-                File::with_name(&format!("{}/config", basepath))
-                    .required(false),
-            )
+            .add_source(File::with_name(&format!("{}/config", basepath)).required(false))
             .add_source(Environment::with_prefix("app"))
             // You may also programmatically change settings?
             .set_default("itretail.store_id", "")?

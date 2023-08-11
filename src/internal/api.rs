@@ -1,10 +1,10 @@
-use chrono::{Local, SecondsFormat, Days};
+use anyhow::{anyhow, Result};
+use chrono::{Days, Local, SecondsFormat};
 use home;
+use log::*;
 use reqwest;
 use reqwest::blocking::multipart;
 use reqwest::header::CONTENT_TYPE;
-use anyhow::{anyhow, Result};
-use log::*;
 
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -15,11 +15,10 @@ use std::time::SystemTime;
 
 pub struct PLUAssignment {
     pub upc: String,
-    pub plu: u16
+    pub plu: u16,
 }
 #[derive(Serialize)]
-struct Empty {
-}
+struct Empty {}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MinimalCustomer {
     #[serde(rename = "FirstName")]
@@ -37,7 +36,7 @@ pub struct MinimalCustomer {
 pub struct Section {
     pub id: u32,
     pub name: String,
-    pub deleted: bool
+    pub deleted: bool,
 }
 #[derive(Deserialize, Debug)]
 pub struct EJTxn {
@@ -58,7 +57,7 @@ pub struct EJTxn {
 }
 #[derive(Deserialize, Debug)]
 struct EJTAnswer {
-    value: Vec<EJTxn>
+    value: Vec<EJTxn>,
 }
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Customer {
@@ -153,7 +152,7 @@ pub struct Shortcut {
     #[serde(rename = "Sort")]
     pub sort: u32,
     #[serde(rename = "Text")]
-    pub text: Option<String>
+    pub text: Option<String>,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Category {
@@ -216,13 +215,11 @@ fn bearer_token_from_json(json: String) -> BearerToken {
     bto
 }
 
-pub fn get_dotfile(filename: &str, writeable: bool) -> Result<File,anyhow::Error> {
+pub fn get_dotfile(filename: &str, writeable: bool) -> Result<File, anyhow::Error> {
     let mut token_filepath = PathBuf::new();
     match home::home_dir() {
         Some(path) => token_filepath.push(path),
-        None => {
-            return Err(anyhow!("unknown home directory"))
-        }
+        None => return Err(anyhow!("unknown home directory")),
     };
     token_filepath.push(".itretail");
     if !token_filepath.is_dir() {
@@ -232,15 +229,21 @@ pub fn get_dotfile(filename: &str, writeable: bool) -> Result<File,anyhow::Error
         }
     }
     token_filepath.push(filename);
-    let file =
-    if writeable {
-        OpenOptions::new().read(true).write(true).create(true).open(token_filepath)
+    let file = if writeable {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(token_filepath)
     } else {
-        OpenOptions::new().read(true).create(true).open(token_filepath)
+        OpenOptions::new()
+            .read(true)
+            .create(true)
+            .open(token_filepath)
     };
     match file {
         Ok(f) => Ok(f),
-        Err(err) => Err(err.into())
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -280,15 +283,11 @@ impl ITRApi {
         let client = reqwest::blocking::Client::new();
         let user = match env::var("ITRETAIL_USERNAME") {
             Ok(p) => p,
-            Err(..) => {
-                return Err(anyhow!("no username provided"))
-            }
+            Err(..) => return Err(anyhow!("no username provided")),
         };
         let pass = match env::var("ITRETAIL_PASSWORD") {
             Ok(p) => p,
-            Err(..) => {
-                return Err(anyhow!("no password provided"))
-            }
+            Err(..) => return Err(anyhow!("no password provided")),
         };
         let params = [
             ("grant_type", "password"),
@@ -314,19 +313,22 @@ impl ITRApi {
                 self.backingfile.sync_all()?;
                 bt
             }
-            Err(e) => {
-                return Err(anyhow!("{}", e.to_string()))
-            }
+            Err(e) => return Err(anyhow!("{}", e.to_string())),
         };
 
         return Ok(());
     }
 
-    pub fn call<T: Serialize + ?Sized>(&mut self, method: reqwest::Method, endpoint: &String, headers: Option<reqwest::header::HeaderMap>, json: Option<&T>) -> Result<String> {
+    pub fn call<T: Serialize + ?Sized>(
+        &mut self,
+        method: reqwest::Method,
+        endpoint: &String,
+        headers: Option<reqwest::header::HeaderMap>,
+        json: Option<&T>,
+    ) -> Result<String> {
         let client = reqwest::blocking::Client::new();
         let url = "https://retailnext.itretail.com".to_owned() + endpoint;
-        let mut builder = client
-            .request(method, url);
+        let mut builder = client.request(method, url);
         if let Some(headers) = headers {
             builder = builder.headers(headers)
         }
@@ -340,19 +342,30 @@ impl ITRApi {
                 if result.status().is_success() {
                     let text_response = result.text()?;
                     Ok(text_response)
-                }  else {
-                    Err(anyhow!("{}", result.status().canonical_reason().unwrap_or(&format!("UNKNOWN CODE: {}", result.status().as_str()))))
+                } else {
+                    Err(anyhow!(
+                        "{}",
+                        result
+                            .status()
+                            .canonical_reason()
+                            .unwrap_or(&format!("UNKNOWN CODE: {}", result.status().as_str()))
+                    ))
                 }
             }
-            Err(e) => Err(anyhow!("{}", e.to_string()))
+            Err(e) => Err(anyhow!("{}", e.to_string())),
         }
     }
 
-    pub fn call_multi<T: Serialize + ?Sized>(&mut self, method: reqwest::Method, endpoint: &String, headers: Option<reqwest::header::HeaderMap>, form: multipart::Form) -> Result<String> {
+    pub fn call_multi<T: Serialize + ?Sized>(
+        &mut self,
+        method: reqwest::Method,
+        endpoint: &String,
+        headers: Option<reqwest::header::HeaderMap>,
+        form: multipart::Form,
+    ) -> Result<String> {
         let client = reqwest::blocking::Client::new();
         let url = "https://retailnext.itretail.com".to_owned() + endpoint;
-        let mut builder = client
-            .request(method, url);
+        let mut builder = client.request(method, url);
         if let Some(headers) = headers {
             builder = builder.headers(headers)
         }
@@ -364,37 +377,65 @@ impl ITRApi {
                 if result.status().is_success() {
                     let text_response = result.text()?;
                     Ok(text_response)
-                }  else {
-                    Err(anyhow!("{}", result.status().canonical_reason().unwrap_or(&format!("UNKNOWN CODE: {}", result.status().as_str()))))
+                } else {
+                    Err(anyhow!(
+                        "{}",
+                        result
+                            .status()
+                            .canonical_reason()
+                            .unwrap_or(&format!("UNKNOWN CODE: {}", result.status().as_str()))
+                    ))
                 }
             }
-            Err(e) => Err(anyhow!("{}", e.to_string()))
+            Err(e) => Err(anyhow!("{}", e.to_string())),
         }
     }
 
     pub fn set_plu(&mut self, plus: Vec<PLUAssignment>) -> Result<String> {
         let endpoint = &"/api/ProductsData/UpdateOnly".to_string();
         let mut csvcontents = "UPC,PLU\r\n".to_string();
-        csvcontents.push_str(&plus.iter().map(|ass| format!("{},{}\r\n", ass.upc, ass.plu)).collect::<String>());
-        let part = reqwest::blocking::multipart::Part::text(csvcontents).file_name("plu.csv").mime_str("text/plain")?;
+        csvcontents.push_str(
+            &plus
+                .iter()
+                .map(|ass| format!("{},{}\r\n", ass.upc, ass.plu))
+                .collect::<String>(),
+        );
+        let part = reqwest::blocking::multipart::Part::text(csvcontents)
+            .file_name("plu.csv")
+            .mime_str("text/plain")?;
         let form = reqwest::blocking::multipart::Form::new();
         let form = form.part("1", part);
-        let form = form.text("2", "[\"upc\",\"PLU\"]")
+        let form = form
+            .text("2", "[\"upc\",\"PLU\"]")
             .text("3", "false")
             .text("5[0]", "198dd573-ca6e-435a-b779-98922ad0185a");
         let r = self.call_multi::<Empty>(reqwest::Method::POST, endpoint, None, form);
         r
     }
 
-    pub fn post_json<T: Serialize + ?Sized>(&mut self, endpoint: &String, json: &T) -> Result<String> {
+    pub fn post_json<T: Serialize + ?Sized>(
+        &mut self,
+        endpoint: &String,
+        json: &T,
+    ) -> Result<String> {
         let mut json_hdrs = reqwest::header::HeaderMap::new();
-        json_hdrs.insert(CONTENT_TYPE, reqwest::header::HeaderValue::from_static("application/json"));
+        json_hdrs.insert(
+            CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
         self.call(reqwest::Method::POST, endpoint, Some(json_hdrs), Some(json))
     }
 
-    pub fn put_json<T: Serialize + ?Sized>(&mut self, endpoint: &String, json: &T) -> Result<String> {
+    pub fn put_json<T: Serialize + ?Sized>(
+        &mut self,
+        endpoint: &String,
+        json: &T,
+    ) -> Result<String> {
         let mut json_hdrs = reqwest::header::HeaderMap::new();
-        json_hdrs.insert(CONTENT_TYPE, reqwest::header::HeaderValue::from_static("application/json"));
+        json_hdrs.insert(
+            CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
         self.call(reqwest::Method::PUT, endpoint, Some(json_hdrs), Some(json))
     }
 
@@ -403,7 +444,9 @@ impl ITRApi {
     }
 
     pub fn get_customers(&mut self) -> Result<Vec<Customer>> {
-        let results = self.get(&"/api/CustomersData/GetAllCustomers".to_string()).expect("no results from API call");
+        let results = self
+            .get(&"/api/CustomersData/GetAllCustomers".to_string())
+            .expect("no results from API call");
         let customers: Vec<Customer> = serde_json::from_str(&results)?;
         Ok(customers)
     }
@@ -416,15 +459,27 @@ impl ITRApi {
     }
 
     pub fn get_sections(&mut self) -> Result<Vec<Section>> {
-        let results = self.get(&"/api/SectionsData/GetAllSections".to_string()).expect("no results from API call");
+        let results = self
+            .get(&"/api/SectionsData/GetAllSections".to_string())
+            .expect("no results from API call");
         let sections: Vec<Section> = serde_json::from_str(&results)?;
         Ok(sections)
     }
 
     pub fn get_categories(&mut self) -> Result<Vec<Category>> {
         let mut hdrs = reqwest::header::HeaderMap::new();
-        hdrs.insert(reqwest::header::HeaderName::from_static("storeids"), reqwest::header::HeaderValue::from_str(&self.store_id)?);
-        let results = self.call::<Empty>(reqwest::Method::GET, &"/api/ProductLookupCategoriesData/GetOne/".to_string(), Some(hdrs), None).expect("no results from API call");
+        hdrs.insert(
+            reqwest::header::HeaderName::from_static("storeids"),
+            reqwest::header::HeaderValue::from_str(&self.store_id)?,
+        );
+        let results = self
+            .call::<Empty>(
+                reqwest::Method::GET,
+                &"/api/ProductLookupCategoriesData/GetOne/".to_string(),
+                Some(hdrs),
+                None,
+            )
+            .expect("no results from API call");
         let cats: Vec<Category> = serde_json::from_str(&results)?;
         Ok(cats)
     }

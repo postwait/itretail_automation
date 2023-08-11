@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use clap::ArgMatches;
 use anyhow::Result;
+use clap::ArgMatches;
 use log::*;
 
 pub fn spend_180_to_discount(spend: f64) -> u8 {
@@ -17,12 +17,16 @@ pub fn spend_180_to_discount(spend: f64) -> u8 {
         t if t > 1200.0 => 5,
         t if t > 600.0 => 4,
         t if t > 300.0 => 3,
-        _ => 0
+        _ => 0,
     }
 }
 
-pub fn apply_discounts(api: &mut super::api::ITRApi, _settings: &super::settings::Settings, args: &ArgMatches) -> Result<()> {
-    let days= args.get_one::<u32>("days").unwrap();
+pub fn apply_discounts(
+    api: &mut super::api::ITRApi,
+    _settings: &super::settings::Settings,
+    args: &ArgMatches,
+) -> Result<()> {
+    let days = args.get_one::<u32>("days").unwrap();
     let normalize = (*days as f64) / 180.0;
     let txn_vec = api.get_transactions(*days as u64)?;
     let customer_vec = api.get_customers()?;
@@ -34,9 +38,9 @@ pub fn apply_discounts(api: &mut super::api::ITRApi, _settings: &super::settings
     for t in txn_vec.iter().filter(|x| !x.canceled) {
         if let Some(cid) = &t.customer_id {
             if let Some(rec) = txn_totals.get_mut(cid) {
-               *rec += t.total;
+                *rec += t.total;
             } else {
-               txn_totals.insert(cid.clone(), t.total);
+                txn_totals.insert(cid.clone(), t.total);
             }
         }
     }
@@ -51,19 +55,42 @@ pub fn apply_discounts(api: &mut super::api::ITRApi, _settings: &super::settings
             if discount > existing_discount {
                 inc += 1;
             }
-            debug!("{} / {} -> ${:.02} (normalized ${:.02}) ({}% -> {}%)", customer.id, customer.email.as_ref().unwrap_or(customer.phone.as_ref().unwrap_or(&"no id".to_owned())), spend, *spend / normalize, existing_discount, discount);
-            if customer.email.as_ref().unwrap_or(&"".to_owned()).ne("jesus@lethargy.org") {
+            debug!(
+                "{} / {} -> ${:.02} (normalized ${:.02}) ({}% -> {}%)",
+                customer.id,
+                customer
+                    .email
+                    .as_ref()
+                    .unwrap_or(customer.phone.as_ref().unwrap_or(&"no id".to_owned())),
+                spend,
+                *spend / normalize,
+                existing_discount,
+                discount
+            );
+            if customer
+                .email
+                .as_ref()
+                .unwrap_or(&"".to_owned())
+                .ne("jesus@lethargy.org")
+            {
                 continue;
             }
             let mut newc = api.get_customer(&customer.id)?; // this is needed b/c our customer is skeletal
             newc.discount = Some(discount);
             let r = api.update_customer(&newc);
             if r.is_err() {
-                warn!("Error updating IT Retail discount for {}: {}", cid, r.err().unwrap());
+                warn!(
+                    "Error updating IT Retail discount for {}: {}",
+                    cid,
+                    r.err().unwrap()
+                );
             }
         }
     }
-    info!("{} customers changed loyalty status, {} increased.", changes, inc);
+    info!(
+        "{} customers changed loyalty status, {} increased.",
+        changes, inc
+    );
 
     Ok(())
 }

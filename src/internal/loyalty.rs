@@ -6,9 +6,12 @@ use log::*;
 
 pub fn spend_180_to_discount(spend: f64) -> u8 {
     match spend {
+        /*
+        Consider these.
         t if t > 12400.0 => 14,
         t if t > 10400.0 => 12,
         t if t > 8600.0 => 11,
+        */
         t if t > 7000.0 => 10,
         t if t > 5600.0 => 9,
         t if t > 4200.0 => 8,
@@ -67,14 +70,6 @@ pub fn apply_discounts(
                 existing_discount,
                 discount
             );
-            if customer
-                .email
-                .as_ref()
-                .unwrap_or(&"".to_owned())
-                .ne("jesus@lethargy.org")
-            {
-                continue;
-            }
             let mut newc = api.get_customer(&customer.id)?; // this is needed b/c our customer is skeletal
             newc.discount = Some(discount);
             let r = api.update_customer(&newc);

@@ -285,6 +285,9 @@ pub fn mailchimp_sync(
     let mut itr_customers = HashMap::new();
     let itc_vec: Vec<super::api::Customer> = api.get_customers()?;
     for customer in itc_vec {
+        if customer.deleted {
+            continue;
+        }
         if customer.email.is_some() {
             let email = customer.email.as_ref().unwrap().to_lowercase();
             if itr_customers.contains_key(&email) {
@@ -352,10 +355,11 @@ pub fn mailchimp_sync(
         };
         match api.make_customer(&min_itr) {
             Ok(_) => {
+                debug!("Added {} to IT Retail.", nc.email_address);
                 added_to_itr = added_to_itr + 1;
             }
             Err(e) => {
-                warn!("failed adding to ITRetail: {} for {:?}", e, &min_itr);
+                warn!("failed adding to IT Retail: {} for {:?}", e, &min_itr);
                 errors = errors + 1;
             }
         }
@@ -376,6 +380,7 @@ pub fn mailchimp_sync(
         );
         match mc_api.post_json(&format!("/lists/{}/members", &list.id), &new_member) {
             Ok(_) => {
+                debug!("Added {} to Mailchimp.", new_member.email_address);
                 added_to_mc = added_to_mc + 1;
             }
             Err(e) => {
@@ -390,10 +395,6 @@ pub fn mailchimp_sync(
     let mut updated_itr = 0;
     for (mc_key, mc_c) in subscribers.iter() {
         if let Some((_, itr_c)) = itr_customers.get_key_value(mc_key) {
-            if mc_key.ne("jesus@lethargy.org") {
-                continue;
-            }
-            println!("{:?}\nvs\n{:?}", mc_c, itr_c);
             let mc_first_name = mc_c
                 .merge_fields
                 .get("FNAME")
@@ -441,13 +442,23 @@ pub fn mailchimp_sync(
                     );
                     errors += 1;
                 } else {
+                    debug!("Updated {} in Mailchimp.", mc_key);
                     updated_mc += 1;
                 }
                 // We really only ever update a phone number from MC
-                if mc_phone.len() > 0 && itr_c.phone.is_none()
-                    || itr_c.phone.as_ref().unwrap().len() == 0
+                if mc_phone.len() > 0
+                    && (itr_c.phone.is_none() || itr_c.phone.as_ref().unwrap().len() == 0)
                 {
-                    let mut newc = api.get_customer(&itr_c.id)?;
+                    let newc_r = api.get_customer(&itr_c.id);
+                    if newc_r.is_err() {
+                        error!(
+                            "Failure to pull customer {}: {}",
+                            itr_c.id,
+                            newc_r.err().unwrap()
+                        );
+                        continue;
+                    }
+                    let mut newc = newc_r.unwrap();
                     newc.phone = Some(normalize_phone(&mc_phone));
                     let r = api.update_customer(&newc);
                     if r.is_err() {
@@ -458,6 +469,7 @@ pub fn mailchimp_sync(
                         );
                         errors += 1;
                     } else {
+                        debug!("Updated {} in IT Retail.", newc.email.unwrap());
                         updated_itr += 1;
                     }
                 }

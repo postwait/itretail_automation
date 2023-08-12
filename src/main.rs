@@ -3,7 +3,7 @@ mod internal;
 use clap::{Arg, ArgAction, Command};
 use log::*;
 use simplelog::*;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::{env, fs};
 
 fn main() {
@@ -17,7 +17,7 @@ fn main() {
                 .short('v')
                 .action(ArgAction::Set)
                 .value_name("off,error,warn,info,debug,trace")
-                .default_value("warn"),
+                .default_value("info"),
         )
         .arg(
             Arg::new("log-file")
@@ -255,7 +255,8 @@ fn main() {
         .set_level_color(Level::Error, Some(Color::Red))
         .set_level_color(Level::Warn, Some(Color::Magenta))
         .set_target_level(LevelFilter::Error)
-        .set_time_level(LevelFilter::Debug)
+        .set_time_format_rfc3339()
+        .set_time_level(LevelFilter::Error)
         .set_max_level(LevelFilter::Error)
         .build();
     let mut loggers: Vec<Box<dyn SharedLogger>> = vec![];
@@ -263,7 +264,11 @@ fn main() {
         loggers.push(WriteLogger::new(
             llevel,
             lconfig.clone(),
-            File::create(logfile).unwrap(),
+            OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(logfile)
+                .unwrap(),
         ));
     } else {
         loggers.push(TermLogger::new(

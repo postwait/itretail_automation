@@ -106,7 +106,7 @@ pub struct Customer {
     #[serde(rename = "FrequentShopper")]
     pub frequent_shopper: Option<bool>,
     #[serde(rename = "CashBack")]
-    pub cash_back: Option<bool>,
+    pub cash_back: Option<f64>,
     #[serde(rename = "Inc")] // WTF is this?
     pub inc: Option<u32>,
 }
@@ -454,8 +454,16 @@ impl ITRApi {
     pub fn get_customer(&mut self, cid: &String) -> Result<Customer> {
         let url = format!("/api/CustomersData/GetOne/?Id={}", cid);
         let results = self.get(&url).expect("no results from API call");
-        let customer: Customer = serde_json::from_str(&results)?;
-        Ok(customer)
+        let customer: Result<Customer, serde_json::Error> = serde_json::from_str(&results);
+        if customer.is_err() {
+            warn!(
+                "ERROR: {}\nJSON: {}",
+                customer.as_ref().err().unwrap(),
+                results
+            );
+            return Err(customer.err().unwrap().into());
+        }
+        Ok(customer.unwrap())
     }
 
     pub fn get_sections(&mut self) -> Result<Vec<Section>> {

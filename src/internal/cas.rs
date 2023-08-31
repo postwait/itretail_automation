@@ -835,7 +835,7 @@ impl ScaleAPI {
         let item = &scale.products[scale.product_idx as usize];
         let mut plu: TD_ST_PLU_V06 = item.into();
         let dw_plu = std::ptr::addr_of!(plu.dwPLU);
-        info!(
+        debug!(
             "Pushing PLU {} to {}",
             unsafe { std::ptr::read_unaligned(dw_plu) },
             scale.ip
@@ -845,7 +845,7 @@ impl ScaleAPI {
 
         scale.last_send_action = DfAction::DOWNLOAD;
         let ret = unsafe {
-            debug!("SEND {} <- {:?}", lpstr_to_strref(td.lpIP), td);
+            trace!("SEND {} <- {:?}", lpstr_to_strref(td.lpIP), td);
             (self.cas_senddata_ex)(td)
         };
         if ret == 0 {

@@ -187,6 +187,12 @@ fn main() {
                         .long("listid")
                         .action(ArgAction::Set)
                         .value_name("LISTID"),
+                )
+                .arg(
+                    Arg::new("email")
+                        .long("email")
+                        .action(ArgAction::Set)
+                        .value_name("EMAIL")
                 ),
         )
         .subcommand(

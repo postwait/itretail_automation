@@ -37,6 +37,8 @@ pub struct UpdateMember {
     pub interests: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<Tag>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -73,9 +75,12 @@ pub fn quick_new_member(
     merge_fields.insert("LNAME".to_owned(), json!(last_name));
     merge_fields.insert("PHONE".to_owned(), json!(phone));
     merge_fields.insert("ITDISCOUNT".to_owned(), json!(discount));
+
+    // We're creating new members from paying customers at a till. We can skip double opt-in.
+    // and just set them to subscribed.
     NewMember {
         email_address: email.to_string(),
-        status: "pending".to_owned(),
+        status: "subscribed".to_owned(),
         email_type: "html".to_owned(),
         merge_fields: merge_fields,
     }
@@ -151,6 +156,37 @@ impl MCApi {
             Some(result) => Ok(result),
             None => Err(anyhow!("No such list")),
         }
+    }
+
+    pub fn get_subscriber(&mut self, listid: &String, email: &String) -> Result<HashMap<String, Member>> {
+        let mut set = HashMap::new();
+        let batch_size = 500;
+        let mut start = 0;
+        let mut total = 0;
+        loop {
+            let url = format!(
+                "lists/{}/members?count={}&offset={}",
+                listid, batch_size, start
+            );
+            let subs = serde_json::from_str::<Members>(&self.get(&url)?)?
+                .members
+                .into_iter();
+            let mut count = 0;
+            for sub in subs {
+                if sub.email_address.eq_ignore_ascii_case(email) {
+                    debug!("MC subscriber: {:?}", sub);
+                    set.insert(sub.email_address.to_lowercase(), sub);
+                }
+                count = count + 1;
+                total = total + 1;
+            }
+            if count == 0 {
+                break;
+            }
+            start = start + batch_size;
+        }
+        debug!("Total mailchimp members: {}", total);
+        Ok(set)
     }
 
     pub fn get_subscribers(&mut self, listid: &String) -> Result<HashMap<String, Member>> {
@@ -271,6 +307,7 @@ impl MCApi {
                 None
             },
             tags: if tags.len() > 0 { Some(tags) } else { None },
+            status: Some(member.status.to_string()),
         };
         let url = format!("/lists/{}/members/{}", list_id, member.id);
         self.do_json(Method::PATCH, &url, &um)
@@ -284,16 +321,20 @@ pub fn mailchimp_sync(
 ) -> Result<()> {
     let mut itr_customers = HashMap::new();
     let itc_vec: Vec<super::api::Customer> = api.get_customers()?;
+    let just_one = args.get_one::<String>("email");
     for customer in itc_vec {
         if customer.deleted {
             continue;
         }
         if customer.email.is_some() {
             let email = customer.email.as_ref().unwrap().to_lowercase();
-            if itr_customers.contains_key(&email) {
-                warn!("IT Retail duplicate: {}", email);
+            if just_one.is_none() || email.eq_ignore_ascii_case(just_one.unwrap()) {
+                if itr_customers.contains_key(&email) {
+                    warn!("IT Retail duplicate: {}", email);
+                }
+                debug!("IT Retail customer: {:?}", customer);
+                itr_customers.insert(email, customer);
             }
-            itr_customers.insert(email, customer);
         }
     }
     debug!("Pulled {} IT Retail customers.", itr_customers.len());
@@ -309,7 +350,10 @@ pub fn mailchimp_sync(
     };
     let mut mc_api = mailchimp_api_new(&settings, mc_token);
     let list = mc_api.get_list(args.get_one::<String>("listid"))?;
-    let subscribers: HashMap<String, Member> = mc_api.get_subscribers(&list.id)?;
+    let subscribers: HashMap<String, Member> = match just_one {
+        Some(email) => mc_api.get_subscriber(&list.id, email)?,
+        _ => mc_api.get_subscribers(&list.id)?
+    };
 
     debug!("Pulled {} mailchimp subscribers.", subscribers.len());
     let to_mc: Vec<&String> = itr_customers
@@ -327,6 +371,9 @@ pub fn mailchimp_sync(
 
     for mc_c in to_itr.iter() {
         let nc = subscribers.get(*mc_c).unwrap();
+        if just_one.is_some() && !nc.email_address.eq_ignore_ascii_case(just_one.unwrap()) {
+            continue;
+        }
         let min_itr = super::api::MinimalCustomer {
             first_name: nc
                 .merge_fields
@@ -367,6 +414,12 @@ pub fn mailchimp_sync(
     info!("Added {} records to IT Retail.", added_to_itr);
     for itr_c in to_mc.iter() {
         let c = itr_customers.get(*itr_c).unwrap();
+        if just_one.is_some() {
+            if !c.email.as_ref().unwrap().eq_ignore_ascii_case(just_one.unwrap()) {
+                continue;
+            }
+            warn!("Found {:?} in IT Retail, not in Mailchimp", c)
+        }
         let c_phone = match &c.phone {
             Some(phone) => phone.to_string(),
             _ => "".to_owned(),
@@ -393,8 +446,19 @@ pub fn mailchimp_sync(
 
     let mut updated_mc = 0;
     let mut updated_itr = 0;
-    for (mc_key, mc_c) in subscribers.iter() {
+    for (mc_key, mc_c_orig) in subscribers.iter() {
+        let mut mc_c = mc_c_orig.clone();
         if let Some((_, itr_c)) = itr_customers.get_key_value(mc_key) {
+            let mut differ = false;
+            if mc_c.status == "pending" {
+                debug!("MC {} is pending, source: {}", mc_c.email_address, mc_c.source);
+                if mc_c.source.contains("API") {
+                    mc_c.status = "subscribed".to_string();
+                    differ = true;
+                } else {
+                    continue;
+                }
+             }
             let mc_first_name = mc_c
                 .merge_fields
                 .get("FNAME")
@@ -427,13 +491,17 @@ pub fn mailchimp_sync(
                 .as_u64()
                 .unwrap_or(0) as u8;
             let c_discount = itr_c.discount.unwrap_or(0);
-            if mc_first_name.ne(&itr_c.first_name)
-                || mc_last_name.ne(&itr_c.last_name)
-                || mc_phone.ne(&c_phone)
-                || mc_discount != c_discount
-            {
+            if !differ {
+                differ = mc_first_name.ne(&itr_c.first_name)
+                    || mc_last_name.ne(&itr_c.last_name)
+                    || mc_phone.ne(&c_phone);
+            }
+            if !differ {
+                differ = mc_discount != c_discount
+            }
+            if differ {
                 trace!("{} records differ ({:?} : {:?}).", mc_key, mc_c, itr_c);
-                let r = mc_api.update_member(&list.id, mc_c, itr_c);
+                let r = mc_api.update_member(&list.id, &mc_c, itr_c);
                 if r.is_err() {
                     warn!(
                         "Failure to update {} in mailchimp: {}",

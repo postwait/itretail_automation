@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use chrono::{Days, Local, SecondsFormat};
+use chrono::{Days, Local, SecondsFormat, NaiveDateTime, DateTime};
 use home;
 use log::*;
 use reqwest;
@@ -118,6 +118,9 @@ pub struct ProductData {
     #[serde(rename = "secondDescription")]
     pub second_description: Option<String>,
     pub normal_price: f64,
+    pub special_price: Option<f64>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
     pub scale: bool,
     pub active: bool,
     #[serde(rename = "Deleted")]
@@ -139,6 +142,28 @@ pub struct ProductData {
     pub case_cost: Option<f32>,
     pub pack: Option<u32>,
     pub cost: Option<f32>,
+}
+
+impl ProductData {
+    pub fn get_price_as_of(&self, whence: DateTime<Local>) -> f64 {
+        if self.start_date.is_some() {
+            let itr_start = NaiveDateTime::parse_from_str(self.start_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S");
+            if itr_start.is_ok() && itr_start.unwrap() <= whence.naive_local() {
+
+                if self.end_date.is_some() {
+                    let itr_end = NaiveDateTime::parse_from_str(self.end_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S");
+                    if itr_end.is_ok() && itr_end.unwrap() <= whence.naive_local() {
+                        return self.normal_price; // expired
+                    }
+                }
+                return self.special_price.unwrap_or(self.normal_price)
+            }
+        }
+        self.normal_price
+    }
+    pub fn get_price(&self) -> f64 {
+        self.get_price_as_of(Local::now())
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]

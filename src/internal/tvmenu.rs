@@ -55,7 +55,7 @@ pub fn make_listing(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<S
                     if let Some(item) = item_map.get(&choice.keystrokes.unwrap()) {
                         menu_file
                             .write(
-                                &format!("{} = ${:.2}/lb\r\n", item.description, item.normal_price)
+                                &format!("{} = ${:.2}/lb\r\n", item.description, item.get_price())
                                     .as_bytes(),
                             )
                             .expect("writing menu item");
@@ -71,7 +71,7 @@ pub fn make_listing(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<S
         for item in weighed_items {
             menu_file
                 .write(
-                    &format!("{} = ${:.2}/lb\r\n", item.description, item.normal_price).as_bytes(),
+                    &format!("{} = ${:.2}/lb\r\n", item.description, item.get_price()).as_bytes(),
                 )
                 .expect("writing menu item");
         }

@@ -204,6 +204,12 @@ fn main() {
                         .value_name("FILENAME"),
                 )
                 .arg(
+                    Arg::new("title")
+                        .long("title")
+                        .action(ArgAction::Set)
+                        .value_name("TITLE"),
+                )
+                .arg(
                     Arg::new("menu")
                         .long("menu")
                         .action(ArgAction::Set)
@@ -392,7 +398,11 @@ fn main() {
                     scmd.get_one::<String>("output").unwrap().to_string(),
                 ),
             };
-            let menu_txt = fs::read_to_string(menu_file).expect("Could not open file.");
+            let mut menu_txt = match scmd.get_one::<String>("title") {
+                Some(title) => title.to_owned() + "\n\n",
+                None => "".to_string()
+            };
+            menu_txt.push_str(&fs::read_to_string(menu_file).expect("Could not open file."));
             let r = internal::tvmenu::make_menu(
                 &output_file,
                 &menu_txt,

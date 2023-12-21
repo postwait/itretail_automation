@@ -374,6 +374,10 @@ pub fn mailchimp_sync(
         if just_one.is_some() && !nc.email_address.eq_ignore_ascii_case(just_one.unwrap()) {
             continue;
         }
+        if nc.status == "unsubscribed" {
+            debug!("not creating IT Retail customer {} for unsubscribed user.", nc.email_address);
+            continue;
+        }
         let min_itr = super::api::MinimalCustomer {
             first_name: nc
                 .merge_fields
@@ -458,7 +462,9 @@ pub fn mailchimp_sync(
                 } else {
                     continue;
                 }
-             }
+            } else if mc_c.status == "unsubscribed" {
+                continue;
+            }
             let mc_first_name = mc_c
                 .merge_fields
                 .get("FNAME")

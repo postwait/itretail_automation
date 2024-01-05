@@ -168,7 +168,6 @@ pub fn make_menu(
                 line,
             );
             let (w, h) = text_size(scale, &font, line);
-            debug!("Text size: {}x{}", w, h);
         }
         y = y + (height as i32);
     }

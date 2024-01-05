@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use chrono::{Days, Local, SecondsFormat, NaiveDateTime, DateTime};
+use chrono::{Days, Local, Utc, SecondsFormat, NaiveDateTime, DateTime};
 use home;
 use log::*;
 use reqwest;
@@ -147,16 +147,26 @@ pub struct ProductData {
 impl ProductData {
     pub fn get_price_as_of(&self, whence: DateTime<Local>) -> f64 {
         if self.start_date.is_some() {
-            let itr_start = NaiveDateTime::parse_from_str(self.start_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S");
-            if itr_start.is_ok() && itr_start.unwrap() <= whence.naive_local() {
+            let itr_start = match NaiveDateTime::parse_from_str(self.start_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S") {
+                Ok(utc_start) => { Ok(DateTime::<Utc>::from_naive_utc_and_offset(utc_start, Utc)) },
+                _ => Err(())
+            };
+            if itr_start.is_ok() && itr_start.unwrap() <= whence {
 
                 if self.end_date.is_some() {
-                    let itr_end = NaiveDateTime::parse_from_str(self.end_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S");
-                    if itr_end.is_ok() && itr_end.unwrap() <= whence.naive_local() {
+                    let itr_end = match NaiveDateTime::parse_from_str(self.end_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S") {
+                        Ok(utc_end) => { Ok(DateTime::<Utc>::from_naive_utc_and_offset(utc_end, Utc)) },
+                        _ => Err(())
+                    };
+                    if itr_end.is_ok() && itr_end.unwrap() <= whence {
+                        debug!("Product {} has sale in past {} <= {}", self.description, itr_end.as_ref().unwrap(), whence);
                         return self.normal_price; // expired
                     }
                 }
+                debug!("Product {} has sale now", self.description);
                 return self.special_price.unwrap_or(self.normal_price)
+            } else {
+                debug!("Product {} has sale in future {} > {}", self.description, itr_start.as_ref().unwrap(), whence);
             }
         }
         self.normal_price

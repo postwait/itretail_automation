@@ -167,7 +167,6 @@ pub fn make_menu(
                 &font,
                 line,
             );
-            let (w, h) = text_size(scale, &font, line);
         }
         y = y + (height as i32);
     }

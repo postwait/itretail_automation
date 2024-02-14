@@ -17,6 +17,46 @@ pub fn create_label_file(file: &String) -> LabelFile {
 }
 
 impl LabelFile {
+    pub fn output_from_itretail_products(&mut self, json: &String, args: &ArgMatches) -> Result<()> {
+        let items: Vec<super::api::ProductData> = serde_json::from_str(json)?;
+        let items_iter = items.into_iter();
+        // we only want items that are not deleted and weighed (002...)
+        let re = args.get_one::<String>("upc").unwrap();
+        let upc_pat = Regex::new(re)?;
+        let qlimit = args.get_one::<f32>("at-least").unwrap();
+        let re = args.get_one::<String>("name").unwrap();
+        let name_pat = RegexBuilder::new(re).build()?;
+        let vendor_id = args
+            .get_one::<String>("vendor")
+            .unwrap()
+            .parse::<i32>()
+            .unwrap_or(0);
+        let items = items_iter.filter(|x| {
+            let wanted = !x.deleted
+                && upc_pat.is_match(&x.upc).unwrap()
+                && name_pat.is_match(&x.description).unwrap()
+                && (vendor_id == 0 || (x.vendor_id.is_some() && vendor_id == x.vendor_id.unwrap()));
+            wanted && (x.quantity_on_hand.unwrap_or(0.0) > *qlimit)
+        });
+
+        let mut row: u32 = 1;
+        for item in items {
+            let plu = if item.plu.is_some() {
+                let _p = item.plu.unwrap().parse::<u16>().unwrap();
+                _p
+            } else {
+                0
+            };
+
+            row = row + 1;
+            println!(
+                "[PLU {}] {} : {} : {}",
+                plu, item.upc, item.description, item.normal_price
+            );
+        }
+
+        Ok(())
+    }
     pub fn build_from_itretail_products(&mut self, json: &String, args: &ArgMatches) -> Result<()> {
         let items: Vec<super::api::ProductData> = serde_json::from_str(json)?;
         let items_iter = items.into_iter();

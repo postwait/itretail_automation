@@ -175,6 +175,39 @@ fn main() {
                 ),
         )
         .subcommand(
+            Command::new("get-plu")
+                .arg(
+                    Arg::new("upc")
+                        .long("upc")
+                        .action(ArgAction::Set)
+                        .value_name("Regex")
+                        .default_value("^002"),
+                )
+                .arg(
+                    Arg::new("name")
+                        .long("name")
+                        .action(ArgAction::Set)
+                        .value_name("Regex")
+                        .default_value("."),
+                )
+                .arg(
+                    Arg::new("vendor")
+                        .long("vendor")
+                        .action(ArgAction::Set)
+                        .value_name("Number")
+                        .default_value("0"),
+                )
+                .arg(
+                    Arg::new("at-least")
+                        .long("at-least")
+                        .short('q')
+                        .action(ArgAction::Set)
+                        .value_name("weight/qty")
+                        .value_parser(clap::value_parser!(f32))
+                        .default_value("-10000000.0"),
+                ),
+        )
+        .subcommand(
             Command::new("mailchimp-sync")
                 .arg(
                     Arg::new("mc_token")
@@ -355,6 +388,18 @@ fn main() {
             let r = scale_file.send(&mut api, &settings, &scmd);
             if r.is_err() {
                 error!("Error: {}", r.err().unwrap());
+                std::process::exit(exitcode::SOFTWARE);
+            }
+            std::process::exit(exitcode::OK);
+        }
+        Some(("get-plu", scmd)) => {
+            let mut label_file = internal::label::create_label_file(&"".to_owned());
+            let results = api
+                .get(&"/api/ProductsData/GetAllProducts".to_string())
+                .expect("no results from API call");
+            let r = label_file.output_from_itretail_products(&results, &scmd);
+            if r.is_err() {
+                error!("{}", r.err().unwrap());
                 std::process::exit(exitcode::SOFTWARE);
             }
             std::process::exit(exitcode::OK);

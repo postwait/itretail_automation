@@ -308,7 +308,7 @@ impl ITRApi {
             Err(..) => u64::MAX,
         };
         if self.bearer_token.expires_at.unwrap_or(0) > now {
-            info!("Using stored token");
+            debug!("Using stored token");
             return Ok(());
         }
 

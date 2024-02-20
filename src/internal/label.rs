@@ -103,7 +103,7 @@ impl LabelFile {
             worksheet.write_string(row, 3, format!("{:.2}", item.normal_price))?;
 
             row = row + 1;
-            info!(
+            debug!(
                 "Writing: [{}] {} : {} : {}",
                 plu, item.upc, item.description, item.normal_price
             );

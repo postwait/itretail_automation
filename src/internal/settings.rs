@@ -12,6 +12,13 @@ pub struct ITRetail {
 
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
+pub struct LocalExpress {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(unused)]
 pub struct Mailchimp {
     pub token: String,
     pub dc: String,
@@ -26,9 +33,17 @@ pub struct Scales {
 
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
+pub struct Postgres {
+    pub connect_string: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(unused)]
 pub struct Settings {
     pub itretail: ITRetail,
+    pub localexpress: LocalExpress,
     pub mailchimp: Mailchimp,
+    pub postgres: Postgres,
     pub scales: Scales,
 }
 
@@ -55,6 +70,7 @@ impl Settings {
             .set_default("itretail.store_id", "")?
             .set_default("itretail.username", "")?
             .set_default("itretail.password", "")?
+            .set_default("postgres.connect_string", "")?
             .set_default("mailchimp.token", "")?
             .set_default("mailchimp.dc", "us21")?
             .set_default("scales.addresses", Vec::<String>::with_capacity(0))?

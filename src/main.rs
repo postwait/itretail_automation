@@ -4,7 +4,7 @@ use clap::{Arg, ArgAction, Command};
 use log::*;
 use simplelog::*;
 use std::fs::OpenOptions;
-use std::{env, fs};
+use std::{env, fs, thread, time};
 
 fn main() {
     let mut cmd = Command::new("itretail_automation")
@@ -28,6 +28,8 @@ fn main() {
         )
         .arg(Arg::new("username").long("username").short('u'))
         .arg(Arg::new("password").long("password").short('p'))
+        .arg(Arg::new("leusername").long("leusername"))
+        .arg(Arg::new("lepassword").long("lepassword"))
         .subcommand(
             Command::new("loyalty").arg(
                 Arg::new("days")
@@ -38,6 +40,27 @@ fn main() {
                     .value_parser(clap::value_parser!(u32))
                     .default_value("180"),
             ),
+        )
+        .subcommand(
+            Command::new("sidedb-sync")
+                .arg(Arg::new("products")
+                         .long("products")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
+                .arg(Arg::new("orders")
+                         .long("orders")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
+                .arg(Arg::new("period")
+                         .long("period")
+                         .short('t')
+                         .action(ArgAction::Set)
+                         .value_name("SECONDS")
+                         .value_parser(clap::value_parser!(u32))
+                         .default_value("0"))
+        )
+        .subcommand(
+            Command::new("le-orders")
         )
         .subcommand(
             Command::new("set-plu")
@@ -325,6 +348,17 @@ fn main() {
     }
     CombinedLogger::init(loggers).unwrap();
 
+    if let Some(cli_lepass) = m.get_one::<String>("lepassword") {
+        env::set_var("LOCALEXPRESS_PASSWORD", cli_lepass)
+    } else if settings.localexpress.password.len() > 0 {
+        env::set_var("LOCALEXPRESS_PASSWORD", settings.localexpress.password.to_string());
+    }
+    if let Some(cli_leuser) = m.get_one::<String>("leusername") {
+        env::set_var("LOCALEXPRESS_USERNAME", cli_leuser)
+    } else if settings.itretail.username.len() > 0 {
+        env::set_var("LOCALEXPRESS_USERNAME", settings.localexpress.username.to_string());
+    }
+
     if let Some(cli_pass) = m.get_one::<String>("password") {
         env::set_var("ITRETAIL_PASSWORD", cli_pass)
     } else if settings.itretail.password.len() > 0 {
@@ -483,6 +517,103 @@ fn main() {
                 error!("Error setting PLU: {}", r.err().unwrap());
                 std::process::exit(exitcode::SOFTWARE);
             }
+        }
+        Some(("le-orders", _scmd)) => {
+            let lehandle = internal::localexpress::create_api();
+            if lehandle.is_err() {
+                panic!("{}", lehandle.err().unwrap())
+            }
+            let mut leapi = lehandle.ok().unwrap();
+            match leapi.auth()  {
+                Err(err) => {
+                    error!("Error authenticating with LocalExpress: {}", err);
+                },
+                _ => {}
+            }
+            let r = leapi.get_orders();
+            if r.is_ok() {
+                info!("{:#?}", r.unwrap());
+                std::process::exit(exitcode::OK);
+            }
+            error!("Error fetching LocalExpress orders: {}", r.err().unwrap());
+            std::process::exit(exitcode::SOFTWARE);
+        }
+        Some(("sidedb-sync", scmd)) => {
+            let mut sidedb = internal::sidedb::make_sidedb(&settings).unwrap();
+            let period = *scmd.get_one::<u32>("period").unwrap();
+            let do_products = scmd.get_flag("products");
+            let do_orders = scmd.get_flag("orders");
+            let do_all = !do_orders && !do_products;
+
+            let mut progress = false;
+            info!("Starting sync process.");
+
+            loop {
+                if do_products || do_all {
+                    let results = api
+                        .get(&"/api/ProductsData/GetAllProducts".to_string())
+                        .expect("no results from API call");
+                    let r: Result<Vec<internal::api::ProductData>, serde_json::Error> = serde_json::from_str(&results);
+                    if r.is_err() {
+                        error!("Error fetching IT Retail products: {}", r.err().unwrap());
+                        std::process::exit(exitcode::SOFTWARE);
+                    } else {
+                        let products = r.unwrap();
+                        let ro = sidedb.store_products(products.iter());
+                        if ro.is_err() {
+                            error!("Failed to store IT Retail products: {}", ro.err().unwrap());
+                            std::process::exit(exitcode::SOFTWARE);
+                        } else {
+                            info!("Pushed {} IT Retail products.", ro.unwrap());
+                        }
+                    }
+                    progress = true;
+                }
+    
+                if do_orders || do_all {
+                    let mut auth_error = false;
+                    loop {
+                        let lehandle = internal::localexpress::create_api();
+                        if lehandle.is_err() {
+                            panic!("{}", lehandle.err().unwrap())
+                        }
+                        let mut leapi = lehandle.ok().unwrap();
+                        match leapi.auth()  {
+                            Err(err) => {
+                                error!("Error authenticating with LocalExpress: {}", err);
+                                std::process::exit(exitcode::SOFTWARE);
+                            },
+                            _ => {}
+                        }
+                        let r = leapi.get_orders();
+                        if r.is_err() {
+                            if !auth_error && r.as_ref().err().unwrap().to_string().eq("Unauthorized") {
+                                warn!("Reauthorizing LocalExpress: {}", r.as_ref().err().unwrap());
+                                auth_error = true;
+                                continue;
+                            }
+                            error!("Error fetching LocalExpress orders: {}", r.err().unwrap());
+                            std::process::exit(exitcode::SOFTWARE);
+                        } else {
+                            let ro = sidedb.store_orders(r.unwrap().iter());
+                            if ro.is_err() {
+                                error!("Failed to store LE orders: {}", ro.err().unwrap());
+                                std::process::exit(exitcode::SOFTWARE);
+                            } else {
+                                info!("Pushed {} LE orders.", ro.unwrap());
+                            }
+                        }
+                        break;
+                    }
+                    progress = true;
+                }
+
+                if period <= 0 || !progress {
+                    break;
+                }
+                thread::sleep(time::Duration::from_secs(period.into()));
+            }
+            std::process::exit(exitcode::OK);
         }
         _ => {
             println!("{}", help);

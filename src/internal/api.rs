@@ -123,6 +123,7 @@ pub struct ProductData {
     pub end_date: Option<String>,
     pub scale: bool,
     pub active: bool,
+    pub discountable: i32,
     #[serde(rename = "Deleted")]
     pub deleted: bool,
     #[serde(rename = "PLU")]
@@ -140,7 +141,7 @@ pub struct ProductData {
     pub quantity_on_hand: Option<f32>,
     pub size: Option<String>,
     pub case_cost: Option<f32>,
-    pub pack: Option<u32>,
+    pub pack: Option<i32>,
     pub cost: Option<f32>,
 }
 

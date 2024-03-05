@@ -10,6 +10,7 @@ anyhow = "1.0.71"
 chrono = "0.4.24"
 clap = "4.2.7"
 config = "0.13.3"
+cookie = { version = "0.18.0", features = ["percent-encode"] }
 exitcode = "1.1.2"
 fancy-regex = "0.11.0"
 home = "0.5.5"
@@ -19,9 +20,12 @@ itertools = "0.11.0"
 lazy_static = "1.4.0"
 libloading = "0.8.0"
 log = "0.4.19"
+postgres = { version = "0.19.7", features = ["with-chrono-0_4"] }
 process_path = "0.1.4"
 regex = "1.8.1"
-reqwest = { version = "0.11.17", features = ["json", "blocking", "multipart"] }
+reqwest = { version = "0.11.17", features = ["json", "blocking", "multipart", "cookies"] }
+rust_decimal = { version = "1.34.3", features = ["db-postgres"] }
+rust_decimal_macros = "1.34.2"
 rust_xlsxwriter = "0.38.0"
 rusttype = "0.9.3"
 serde = { version = "1.0.160", features = ["derive"] }

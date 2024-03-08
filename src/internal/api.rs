@@ -40,6 +40,10 @@ pub struct Section {
     pub deleted: bool,
 }
 #[derive(Deserialize, Debug)]
+pub struct EJTxnProductChange {
+    pub upc: String
+}
+#[derive(Deserialize, Debug)]
 pub struct EJTxnProduct {
     #[serde(rename = "Id")]
     pub id: Uuid,
@@ -57,6 +61,8 @@ pub struct EJTxnProduct {
     pub is_refunded: bool,
     #[serde(rename = "LineDiscount")]
     pub line_discount: f64,
+    #[serde(rename = "ProductChange")]
+    pub product_change: Option<EJTxnProductChange>,
 }
 #[derive(Deserialize, Debug)]
 pub struct EJTxn {
@@ -564,6 +570,7 @@ impl ITRApi {
         self.put_json(&"/api/CustomersData/Put".to_string(), c)
     }
 
+    /*
     pub fn get_transactions(&mut self, ndays: u64) -> Result<Vec<EJTxn>> {
         let days = Days::new(ndays);
         let now = Local::now();
@@ -578,6 +585,7 @@ impl ITRApi {
         let answer: EJTAnswer = serde_json::from_str(&r)?;
         Ok(answer.value)
     }
+    */
 
     pub fn get_transactions_details(&mut self, start_o: Option<&DateTime<Local>>, end_o: Option<&DateTime<Local>>) -> Result<Vec<EJTxn>> {
         let end_default = Local::now();
@@ -587,7 +595,7 @@ impl ITRApi {
         // This returns a productId that is a uuid.  Nowhere else in the APIs can I find a uuid attached to
         // rows of the products, so we don't have a mapping from productid <-> upc
         let url = format!("/api/ElectronicJournalData/Get?\
-            $expand=TransactionTenders($select+%3D+TenderCode,LastCardDigits),TransactionProducts($select+%3D+%2A)&\
+            $expand=TransactionTenders($select+%3D+TenderCode,LastCardDigits),TransactionProducts($select+%3D+%2A),TransactionProducts($expand=ProductChange($select+%3D+upc))&\
             $filter=(TransactionDate+ge+{}+and++TransactionDate+lt+{})+and+(Total+ne+null)&\
             $orderby=TransactionDate&$select=Id,EmployeeId,TransactionDate,Total,Canceled,CustomerId,CustomerFirstName,CustomerLastName",
             start.to_rfc3339_opts(SecondsFormat::Secs, true),

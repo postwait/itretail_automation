@@ -38,10 +38,14 @@ impl SideDb {
             if num_rows > 0 {
                 if let Some(products) = t.transaction_products.as_ref() {
                     for p in products {
+                        let upc = match &p.product_change {
+                            Some(pc) => Some(pc.upc.clone()),
+                            None => None,
+                        };
                         sqltxn.execute("INSERT INTO itrejtxn_products
-                            (transaction_subid, transaction_id, product_id, is_voided, is_refunded, price, line_discount, weight)
-                            VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",
-                        &[&p.id, &t.id, &p.product_id, &p.is_voided, &p.is_refunded,
+                            (transaction_subid, transaction_id, product_id, upc, is_voided, is_refunded, price, line_discount, weight)
+                            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING",
+                        &[&p.id, &t.id, &p.product_id, &upc, &p.is_voided, &p.is_refunded,
                           &Decimal::from_f64(p.price), &Decimal::from_f64(p.line_discount), &p.weight])?;
                     }
                 }

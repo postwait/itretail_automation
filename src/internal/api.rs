@@ -12,6 +12,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
 use std::time::SystemTime;
+use uuid::Uuid;
 
 pub struct PLUAssignment {
     pub upc: String,
@@ -39,21 +40,42 @@ pub struct Section {
     pub deleted: bool,
 }
 #[derive(Deserialize, Debug)]
+pub struct EJTxnProduct {
+    #[serde(rename = "Id")]
+    pub id: Uuid,
+    #[serde(rename = "ProductId")]
+    pub product_id: Option<Uuid>,
+    #[serde(rename = "Weight")]
+    pub weight: Option<f64>,
+    #[serde(rename = "Quantity")]
+    pub quantity: f64,
+    #[serde(rename = "Price")]
+    pub price: f64,
+    #[serde(rename = "IsVoided")]
+    pub is_voided: bool,
+    #[serde(rename = "IsRefunded")]
+    pub is_refunded: bool,
+    #[serde(rename = "LineDiscount")]
+    pub line_discount: f64,
+}
+#[derive(Deserialize, Debug)]
 pub struct EJTxn {
     #[serde(rename = "Id")]
-    pub id: String,
+    pub id: Uuid,
     #[serde(rename = "CustomerLastName")]
     pub customer_last_name: Option<String>,
     #[serde(rename = "CustomerFirstName")]
     pub customer_first_name: Option<String>,
     #[serde(rename = "CustomerId")]
-    pub customer_id: Option<String>,
+    pub customer_id: Option<Uuid>,
     #[serde(rename = "Canceled")]
     pub canceled: bool,
     #[serde(rename = "Total")]
     pub total: f64,
     #[serde(rename = "TransactionDate")]
     pub transaction_date: String,
+    #[serde(rename = "TransactionProducts")]
+    pub transaction_products: Option<Vec<EJTxnProduct>>,
 }
 #[derive(Deserialize, Debug)]
 struct EJTAnswer {
@@ -62,7 +84,7 @@ struct EJTAnswer {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Customer {
     #[serde(rename = "Id")]
-    pub id: String,
+    pub id: Uuid,
     #[serde(rename = "CardNo")]
     pub card_no: Option<String>,
     #[serde(rename = "LastName")]
@@ -97,6 +119,8 @@ pub struct Customer {
     pub city: Option<String>,
     #[serde(rename = "State")]
     pub state: Option<String>,
+    #[serde(rename = "Zip")]
+    pub zipcode: Option<String>,
     #[serde(rename = "Created")]
     pub created: Option<String>,
     #[serde(rename = "Modified")]
@@ -109,6 +133,10 @@ pub struct Customer {
     pub cash_back: Option<f64>,
     #[serde(rename = "Inc")] // WTF is this?
     pub inc: Option<u32>,
+}
+#[derive(Deserialize, Debug)]
+pub struct CustomersAnswer {
+    pub value: Vec<Customer>
 }
 
 #[derive(Deserialize, Debug)]
@@ -481,13 +509,13 @@ impl ITRApi {
 
     pub fn get_customers(&mut self) -> Result<Vec<Customer>> {
         let results = self
-            .get(&"/api/CustomersData/GetAllCustomers".to_string())
+            .get(&"/api/CustomersData/Get?$select=%2A".to_string())
             .expect("no results from API call");
-        let customers: Vec<Customer> = serde_json::from_str(&results)?;
-        Ok(customers)
+        let answer: CustomersAnswer = serde_json::from_str(&results)?;
+        Ok(answer.value)
     }
 
-    pub fn get_customer(&mut self, cid: &String) -> Result<Customer> {
+    pub fn get_customer(&mut self, cid: &Uuid) -> Result<Customer> {
         let url = format!("/api/CustomersData/GetOne/?Id={}", cid);
         let results = self.get(&url).expect("no results from API call");
         let customer: Result<Customer, serde_json::Error> = serde_json::from_str(&results);
@@ -546,6 +574,24 @@ impl ITRApi {
             $orderby=TransactionDate&$select=Id,EmployeeId,TransactionDate,Total,Canceled,CustomerId,CustomerFirstName,CustomerLastName",
             then.to_rfc3339_opts(SecondsFormat::Secs, true),
             now.to_rfc3339_opts(SecondsFormat::Secs, true));
+        let r = self.get(&url).expect("Electronic Journal Output");
+        let answer: EJTAnswer = serde_json::from_str(&r)?;
+        Ok(answer.value)
+    }
+
+    pub fn get_transactions_details(&mut self, start_o: Option<&DateTime<Local>>, end_o: Option<&DateTime<Local>>) -> Result<Vec<EJTxn>> {
+        let end_default = Local::now();
+        let end = end_o.unwrap_or(&end_default);
+        let start_default = end.checked_sub_days(Days::new(1)).unwrap();
+        let start = start_o.unwrap_or(&start_default);
+        // This returns a productId that is a uuid.  Nowhere else in the APIs can I find a uuid attached to
+        // rows of the products, so we don't have a mapping from productid <-> upc
+        let url = format!("/api/ElectronicJournalData/Get?\
+            $expand=TransactionTenders($select+%3D+TenderCode,LastCardDigits),TransactionProducts($select+%3D+%2A)&\
+            $filter=(TransactionDate+ge+{}+and++TransactionDate+lt+{})+and+(Total+ne+null)&\
+            $orderby=TransactionDate&$select=Id,EmployeeId,TransactionDate,Total,Canceled,CustomerId,CustomerFirstName,CustomerLastName",
+            start.to_rfc3339_opts(SecondsFormat::Secs, true),
+            end.to_rfc3339_opts(SecondsFormat::Secs, true));
         let r = self.get(&url).expect("Electronic Journal Output");
         let answer: EJTAnswer = serde_json::from_str(&r)?;
         Ok(answer.value)

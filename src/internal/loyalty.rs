@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use clap::ArgMatches;
 use log::*;
+use uuid::Uuid;
+use rust_decimal::prelude::*;
 
 pub fn spend_180_to_discount(spend: f64) -> u8 {
     match spend {
@@ -26,31 +28,30 @@ pub fn spend_180_to_discount(spend: f64) -> u8 {
 
 pub fn apply_discounts(
     api: &mut super::api::ITRApi,
+    sidedb: &mut super::sidedb::SideDb,
     _settings: &super::settings::Settings,
     args: &ArgMatches,
 ) -> Result<()> {
     let days = args.get_one::<u32>("days").unwrap();
     let normalize = (*days as f64) / 180.0;
-    let txn_vec = api.get_transactions(*days as u64)?;
-    let customer_vec = api.get_customers()?;
+    let spend_vec = sidedb.get_spend(*days)?;
+    let customer_vec = sidedb.get_customers()?;
     let mut customers = HashMap::new();
     for c in customer_vec.iter() {
         customers.insert(c.id.clone(), c);
     }
-    let mut txn_totals: HashMap<String, f64> = HashMap::new();
-    for t in txn_vec.iter().filter(|x| !x.canceled) {
-        if let Some(cid) = &t.customer_id {
-            if let Some(rec) = txn_totals.get_mut(cid) {
-                *rec += t.total;
-            } else {
-                txn_totals.insert(cid.clone(), t.total);
-            }
+    let mut txn_totals: HashMap<Uuid, f64> = HashMap::new();
+    for t in spend_vec.iter() {
+        if let Some(rec) = txn_totals.get_mut(&t.0) {
+            *rec += t.1.to_f64().unwrap();
+        } else {
+            txn_totals.insert(t.0.clone(), t.1.to_f64().unwrap());
         }
     }
     let mut changes = 0;
     let mut inc = 0;
     for (cid, customer) in &customers {
-        let spend = txn_totals.get(cid).unwrap_or(&0.0);
+        let spend = txn_totals.get(&cid).unwrap_or(&0.0);
         let discount = spend_180_to_discount(*spend / normalize);
         let existing_discount = customer.discount.unwrap_or(0);
         if existing_discount != discount {
@@ -70,15 +71,17 @@ pub fn apply_discounts(
                 existing_discount,
                 discount
             );
-            let mut newc = api.get_customer(&customer.id)?; // this is needed b/c our customer is skeletal
-            newc.discount = Some(discount);
-            let r = api.update_customer(&newc);
-            if r.is_err() {
-                warn!(
-                    "Error updating IT Retail discount for {}: {}",
-                    cid,
-                    r.err().unwrap()
-                );
+            if let Ok(mut newc) = api.get_customer(&customer.id) {
+                // this is needed b/c our customer is skeletal
+                newc.discount = Some(discount);
+                let r = api.update_customer(&newc);
+                if r.is_err() {
+                    warn!(
+                        "Error updating IT Retail discount for {}: {}",
+                        cid,
+                        r.err().unwrap()
+                    );
+                }
             }
         }
     }

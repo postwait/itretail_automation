@@ -1,10 +1,16 @@
 mod internal;
 
+use chrono::{DateTime, Local, NaiveDateTime, ParseError, TimeZone};
 use clap::{Arg, ArgAction, Command};
 use log::*;
 use simplelog::*;
 use std::fs::OpenOptions;
 use std::{env, fs, thread, time};
+
+fn parse_timestamp(arg: &str) -> Result<NaiveDateTime,ParseError> {
+    let dt = NaiveDateTime::parse_from_str(arg, "%Y-%m-%dT%H:%M:%S");
+    dt
+}
 
 fn main() {
     let mut cmd = Command::new("itretail_automation")
@@ -43,6 +49,28 @@ fn main() {
         )
         .subcommand(
             Command::new("sidedb-sync")
+                .arg(Arg::new("customers")
+                         .long("customers")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
+                .arg(Arg::new("customers-full")
+                         .long("customers-full")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
+                .arg(Arg::new("transactions")
+                         .long("transactions")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
+                .arg(Arg::new("start")
+                         .long("start")
+                         .action(ArgAction::Set)
+                         .value_name("DATETIME")
+                         .value_parser(parse_timestamp))
+                .arg(Arg::new("end")
+                         .long("end")
+                         .action(ArgAction::Set)
+                         .value_name("DATETIME")
+                         .value_parser(parse_timestamp))
                 .arg(Arg::new("products")
                          .long("products")
                          .action(ArgAction::SetTrue)
@@ -411,7 +439,8 @@ fn main() {
 
     match m.subcommand() {
         Some(("loyalty", scmd)) => {
-            let r = internal::loyalty::apply_discounts(&mut api, &settings, &scmd);
+            let mut sidedb = internal::sidedb::make_sidedb(&settings).unwrap();
+            let r = internal::loyalty::apply_discounts(&mut api, &mut sidedb, &settings, &scmd);
             if r.is_err() {
                 error!("Error reading electronic journal: {}", r.err().unwrap());
                 std::process::exit(exitcode::SOFTWARE);
@@ -542,14 +571,40 @@ fn main() {
             let mut sidedb = internal::sidedb::make_sidedb(&settings).unwrap();
             let period = *scmd.get_one::<u32>("period").unwrap();
             let do_products = scmd.get_flag("products");
+            let do_customers = scmd.get_flag("customers");
+            let full_customer = scmd.get_flag("customers-full");
+            let do_txns = scmd.get_flag("transactions");
             let do_orders = scmd.get_flag("orders");
-            let do_all = !do_orders && !do_products;
+            let do_all = !do_txns && !do_orders && !do_products && !do_customers && !full_customer;
 
             let mut progress = false;
             info!("Starting sync process.");
 
             loop {
+                if do_customers || full_customer || do_all {
+                    info!("Starting customer sync.");
+                    let r= api.get_customers();
+                    if r.is_err() {
+                        error!("Error fetching IT Retail customers: {}", r.err().unwrap());
+                        std::process::exit(exitcode::SOFTWARE);
+                    } else {
+                        let ro = 
+                        if full_customer {
+                            sidedb.store_customers(r.unwrap().into_iter().filter_map(|x| api.get_customer(&x.id).ok()))
+                        } else {
+                            sidedb.store_customers(r.unwrap().into_iter())
+                        };
+                        if ro.is_err() {
+                            error!("Failed to store IT Retail customers: {}", ro.err().unwrap());
+                            std::process::exit(exitcode::SOFTWARE);
+                        } else {
+                            info!("Pushed {} IT Retail customers.", ro.unwrap());
+                        }
+                    }
+                }
+
                 if do_products || do_all {
+                    info!("Starting product sync.");
                     let results = api
                         .get(&"/api/ProductsData/GetAllProducts".to_string())
                         .expect("no results from API call");
@@ -569,8 +624,45 @@ fn main() {
                     }
                     progress = true;
                 }
+
+                if do_txns || do_all {
+                    info!("Starting transaction sync.");
+                    let start_ndt = scmd.get_one::<NaiveDateTime>("start");
+                    let sdtl: DateTime<Local>;
+                    let start = match start_ndt {
+                        Some(dt) => {
+                            sdtl = Local.from_local_datetime(dt).unwrap();
+                            Some(&sdtl)
+                        },
+                        None => None,
+                    };
+                    let end_ndt = scmd.get_one::<NaiveDateTime>("end");
+                    let edtl: DateTime<Local>;
+                    let end = match end_ndt {
+                        Some(dt) => {
+                            edtl = Local.from_local_datetime(dt).unwrap();
+                            Some(&edtl)
+                        },
+                        None => None,
+                    };
+                    let r = api.get_transactions_details(start, end);
+                    if r.is_err() {
+                        error!("Error fetching IT Retail transactions: {}", r.err().unwrap());
+                        std::process::exit(exitcode::SOFTWARE);
+                    } else {
+                        let txns = r.unwrap();
+                        let ro = sidedb.store_txns(txns.iter());
+                        if ro.is_err() {
+                            error!("Failed to store IT Retail transactions: {}", ro.err().unwrap());
+                            std::process::exit(exitcode::SOFTWARE);
+                        } else {
+                            info!("Pushed {} IT Retail transactions.", ro.unwrap());
+                        }
+                    }
+                }
     
                 if do_orders || do_all {
+                    info!("Starting LocalExpress orders sync.");
                     let mut auth_error = false;
                     loop {
                         let lehandle = internal::localexpress::create_api();

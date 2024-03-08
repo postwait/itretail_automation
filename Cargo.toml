@@ -20,7 +20,7 @@ itertools = "0.11.0"
 lazy_static = "1.4.0"
 libloading = "0.8.0"
 log = "0.4.19"
-postgres = { version = "0.19.7", features = ["with-chrono-0_4"] }
+postgres = { version = "0.19.7", features = ["with-chrono-0_4", "with-uuid-1"] }
 process_path = "0.1.4"
 regex = "1.8.1"
 reqwest = { version = "0.11.17", features = ["json", "blocking", "multipart", "cookies"] }
@@ -32,3 +32,4 @@ serde = { version = "1.0.160", features = ["derive"] }
 serde_derive = "1.0.160"
 serde_json = "1.0.96"
 simplelog = { version = "0.12.1", features = ["termcolor"] }
+uuid = { version = "1.0", features = ["serde"] }

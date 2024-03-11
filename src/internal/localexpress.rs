@@ -399,9 +399,10 @@ impl LEApi {
 
     pub fn get_orders(&mut self) -> Result<Vec<Order>> {
         let endpoint = "/rest/v2/store/all/order?expand=productsCount,driverName&perPage=50&page=0".to_string();
-        let filter = json!({"filter":{"status":["new","confirmed","assembling","assembled","packing","packed"]},"filterType":"basic"});
+        let filter = json!({});//"filter":{"status":["new","confirmed","assembling","assembled","packing","packed"]},"filterType":"basic"});
         let r = self.post_json(&endpoint, &filter)?;
         let response: OrdersResponse = serde_json::from_str(&r)?;
+        println!("{:#?}", response.data.result);
         Ok(response.data.result)
     }
 }

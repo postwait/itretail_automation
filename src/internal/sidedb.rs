@@ -163,7 +163,6 @@ impl SideDb {
 
         let mut txn = self.client.transaction()?;
         let mut cnt = 0;
-        txn.execute("DELETE FROM leorder", &[])?;
         for o in orders {
             let cd = o.delivery_time_period.split(" - ").collect::<Vec<&str>>();
             let (st, et) = if cd.len() == 2 { (cd[0], cd[1]) }
@@ -172,17 +171,25 @@ impl SideDb {
             let (sd,ed) =
                 (NaiveDateTime::parse_from_str(&format!("{}T{}:00", dd, st), "%Y-%m-%dT%H:%M:%S")?,
                 NaiveDateTime::parse_from_str(&format!("{}T{}:00", dd, et),"%Y-%m-%dT%H:%M:%S")?);
-            txn.execute("INSERT INTO leorder
+            let re = txn.execute("INSERT INTO leorder
                            (id, uniqid, store_id, status,
                             subtotal, tips, total,
                             mode, payment_method, customer_first_name, customer_last_name,
                             customer_phone_number, customer_email, creation_date, delivery_date, delivery_time_period)
-                            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,tsrange($16,$17))",
+                            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,tsrange($16,$17))
+                            ON CONFLICT (uniqid) DO UPDATE SET
+                            id = EXCLUDED.id, store_id = EXCLUDED.store_id, status = EXCLUDED.status,
+                            subtotal = EXCLUDED.subtotal, tips = EXCLUDED.tips, total = EXCLUDED.total,
+                            mode = EXCLUDED.mode, payment_method = EXCLUDED.payment_method,
+                            customer_first_name = EXCLUDED.customer_first_name, customer_last_name = EXCLUDED.customer_last_name,
+                            customer_phone_number = EXCLUDED.customer_phone_number, customer_email = EXCLUDED.customer_email,
+                            creation_date = EXCLUDED.creation_date, delivery_date = EXCLUDED.delivery_date,
+                            delivery_time_period = EXCLUDED.delivery_time_period",
                     &[&(o.id as i64), &o.uniqid, &(o.store_id as i64), &o.status,
                       &decimal_price(&o.subtotal), &decimal_price(&o.tips), &decimal_price(&o.total),
                       &o.mode, &o.payment_method, &o.customer_first_name, &o.customer_last_name,
                       &o.customer_phone_number, &o.customer_email, &o.creation_date, &o.delivery_date, &sd, &ed])?;
-            cnt += 1;
+            cnt += re as u32;
         }
         txn.commit()?;
         Ok(cnt)

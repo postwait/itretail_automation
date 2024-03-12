@@ -43,10 +43,10 @@ impl SideDb {
                             None => None,
                         };
                         sqltxn.execute("INSERT INTO itrejtxn_products
-                            (transaction_subid, transaction_id, product_id, upc, is_voided, is_refunded, price, line_discount, weight)
-                            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING",
+                            (transaction_subid, transaction_id, product_id, upc, is_voided, is_refunded, price, line_discount, quantity, weight)
+                            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING",
                         &[&p.id, &t.id, &p.product_id, &upc, &p.is_voided, &p.is_refunded,
-                          &Decimal::from_f64(p.price), &Decimal::from_f64(p.line_discount), &p.weight])?;
+                          &Decimal::from_f64(p.price), &Decimal::from_f64(p.line_discount), &p.quantity, &p.weight])?;
                     }
                 }
                 cnt += 1;

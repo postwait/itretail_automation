@@ -1,6 +1,6 @@
 mod internal;
 
-use chrono::{DateTime, Local, NaiveDateTime, ParseError, TimeZone};
+use chrono::{DateTime, Local, NaiveDateTime, NaiveDate, ParseError, TimeZone};
 use clap::{Arg, ArgAction, Command};
 use log::*;
 use simplelog::*;
@@ -9,6 +9,10 @@ use std::{env, fs, thread, time};
 
 fn parse_timestamp(arg: &str) -> Result<NaiveDateTime,ParseError> {
     let dt = NaiveDateTime::parse_from_str(arg, "%Y-%m-%dT%H:%M:%S");
+    dt
+}
+fn parse_date(arg: &str) -> Result<NaiveDate,ParseError> {
+    let dt = NaiveDate::parse_from_str(arg, "%Y-%m-%d");
     dt
 }
 
@@ -186,6 +190,11 @@ fn main() {
         )
         .subcommand(
             Command::new("label-export")
+                .arg(Arg::new("as-of")
+                         .long("as-of")
+                         .action(ArgAction::Set)
+                         .value_name("DATE")
+                         .value_parser(parse_date))
                 .arg(
                     Arg::new("output")
                         .long("output")
@@ -193,6 +202,12 @@ fn main() {
                         .action(ArgAction::Set)
                         .value_name("FILE")
                         .default_value("labels.xlsx"),
+                )
+                .arg(
+                    Arg::new("sheets")
+                        .long("sheets")
+                        .num_args(0)
+                        .action(ArgAction::SetTrue)
                 )
                 .arg(
                     Arg::new("upc")
@@ -223,6 +238,12 @@ fn main() {
                         .value_name("weight/qty")
                         .value_parser(clap::value_parser!(f32))
                         .default_value("-10000000.0"),
+                )
+                .arg(
+                    Arg::new("headers")
+                        .long("headers")
+                        .action(ArgAction::Set)
+                        .default_value("name,plu,upc,price")
                 ),
         )
         .subcommand(
@@ -469,11 +490,11 @@ fn main() {
         }
         Some(("label-export", scmd)) => {
             let filename = scmd.get_one::<String>("output").unwrap();
+            let asof = scmd.get_one::<NaiveDate>("as-of");
             let mut label_file = internal::label::create_label_file(filename);
-            let results = api
-                .get(&"/api/ProductsData/GetAllProducts".to_string())
-                .expect("no results from API call");
-            let r = label_file.build_from_itretail_products(&results, &scmd);
+            let mut sidedb = internal::sidedb::make_sidedb(&settings).unwrap();
+            let items = sidedb.get_products(asof).unwrap();
+            let r = label_file.build_from_itretail_products(&items, &scmd);
             if r.is_err() {
                 error!("{}", r.err().unwrap());
                 std::process::exit(exitcode::SOFTWARE);

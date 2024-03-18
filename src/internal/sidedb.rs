@@ -5,7 +5,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use log::*;
 use uuid::Uuid;
 
-use super::api::Customer;
+use super::api::{Customer, ProductData};
 
 pub struct SideDb {
     client: Client,
@@ -233,6 +233,35 @@ impl SideDb {
         }
         txn.commit()?;
         Ok(cnt)
+    }
+    pub fn get_products(&mut self, date: Option<&NaiveDate>) -> Result<Vec<ProductData>> {
+        let rows = if date.is_some() {
+            let dr = date.unwrap();
+            self.client.query("SELECT *, lower(special_date) as start_date, upper(special_date) as end_date
+                FROM itrproduct_archive
+                WHERE NOT deleted and date(timezone('US/Eastern',recorded_at)) = $1
+                ORDER BY department_id, section_id", &[dr])
+        } else {
+            self.client.query("SELECT *, lower(special_date) as start_date, upper(special_date) as end_date
+                FROM itrproduct
+                WHERE NOT deleted
+                ORDER BY department_id, section_id", &[])
+        }?;
+        let products = rows.iter().map(|x| {
+            ProductData { upc: x.get("upc"), description: x.get("description"),
+                second_description: x.get("second_description"), normal_price: x.get::<&str,Decimal>("normal_price").to_f64().unwrap(),
+                special_price: x.get::<&str,Option<Decimal>>("special_price").and_then(|x| x.to_f64()),
+                start_date: x.get::<&str,Option<NaiveDateTime>>("start_date").and_then(|x| Some(x.to_string())),
+                end_date: x.get::<&str,Option<NaiveDateTime>>("end_date").and_then(|x| Some(x.to_string())),
+                scale: x.get("scale"), active: x.get("active"),
+                discountable: if x.get::<&str,bool>("discount") { 1 } else { 0 }, plu: x.get("plu"),
+                deleted: x.get("deleted"), cert_code: x.get("cert_code"), vendor_id: x.get("vendor_id"),
+                department_id: x.get("department_id"), section_id: x.get("section_id"), wicable: x.get("wicable"),
+                foodstamp: x.get("foodstamp"), quantity_on_hand: x.get::<&str,Option<f64>>("quantity_on_hand").and_then(|x| Some(x as f32)), size: x.get("size"),
+                case_cost: x.get::<&str,Option<Decimal>>("case_cost").and_then(|x| x.to_f32()), pack: x.get("pack"),
+                cost: x.get::<&str,Option<Decimal>>("cost").and_then(|x| x.to_f32()) }
+        }).collect();
+        Ok(products)
     }
 
     pub fn get_spend(&mut self, days: u32) -> Result<Vec<(Uuid, Decimal)>> {

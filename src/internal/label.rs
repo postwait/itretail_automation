@@ -96,7 +96,6 @@ impl LabelFile {
             }
             if use_sheets && last_sheet != (item.department_id,item.section_id) {
                 last_sheet = (item.department_id,item.section_id);
-                println!("Adding worksheet: {:?}", last_sheet);
                 worksheet = workbook.add_worksheet();
                 row = 1;
             }

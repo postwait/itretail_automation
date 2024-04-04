@@ -327,8 +327,6 @@ fn main() {
                         .long("output")
                         .action(ArgAction::Set)
                         .value_name("FILENAME")
-                        .conflicts_with("pull")
-                        .default_value("tvscreen.png"),
                 )
                 .arg(
                     Arg::new("invert")
@@ -342,8 +340,7 @@ fn main() {
                         .long("pull")
                         .short('u')
                         .action(ArgAction::Set)
-                        .conflicts_with("menu")
-                        .conflicts_with("output"),
+                        .conflicts_with("menu"),
                 ),
         );
     let help = cmd.render_help();
@@ -520,11 +517,11 @@ fn main() {
                         );
                         std::process::exit(exitcode::SOFTWARE);
                     }
-                    (r.unwrap(), String::from(cat) + ".png")
+                    (r.unwrap(), scmd.get_one::<String>("output").unwrap_or(&(String::from(cat) + ".png")).to_string())
                 }
                 None => (
                     scmd.get_one::<String>("menu").unwrap().to_string(),
-                    scmd.get_one::<String>("output").unwrap().to_string(),
+                    scmd.get_one::<String>("output").unwrap_or(&"tvscreen.png".to_string()).to_string(),
                 ),
             };
             let mut menu_txt = match scmd.get_one::<String>("title") {

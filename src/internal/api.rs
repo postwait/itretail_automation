@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use chrono::{Days, Local, Utc, SecondsFormat, NaiveDateTime, DateTime};
+use chrono::{DateTime, Days, Local, NaiveDateTime, SecondsFormat, Timelike, Utc};
 use home;
 use log::*;
 use reqwest;
@@ -181,20 +181,32 @@ pub struct ProductData {
 
 impl ProductData {
     pub fn get_price_as_of(&self, whence: DateTime<Local>) -> f64 {
+        // IT Retail is a distater.  It can't get timestamps on sales start/end right.
+        // The DB/API has hours set, but the UI doesn't allow specifying them and they seem somewhat randomly assigned.
+        // More of a crime, the hours for the end date appear to be KNOWN to be wrong and the app ignores them and pretends they are 23:59:59.
+        // WTF writes code like this?
+
+        // As such, it is on us to floor the start and ceiling the end dates for the purposes of comparison
         if self.start_date.is_some() {
             let itr_start = match NaiveDateTime::parse_from_str(self.start_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S") {
-                Ok(utc_start) => { Ok(DateTime::<Utc>::from_naive_utc_and_offset(utc_start, Utc)) },
+                Ok(utc_start) => { Ok(DateTime::<Utc>::from_naive_utc_and_offset(utc_start, Utc)
+                                                        .with_hour(0).unwrap()
+                                                        .with_minute(0).unwrap()
+                                                        .with_second(0).unwrap()) },
                 _ => Err(())
             };
             if itr_start.is_ok() && itr_start.unwrap() <= whence {
 
                 if self.end_date.is_some() {
                     let itr_end = match NaiveDateTime::parse_from_str(self.end_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S") {
-                        Ok(utc_end) => { Ok(DateTime::<Utc>::from_naive_utc_and_offset(utc_end, Utc)) },
+                        Ok(utc_end) => { Ok(DateTime::<Utc>::from_naive_utc_and_offset(utc_end, Utc)
+                                                            .with_hour(23).unwrap()
+                                                            .with_minute(59).unwrap()
+                                                            .with_second(59).unwrap()) },
                         _ => Err(())
                     };
                     if itr_end.is_ok() && itr_end.unwrap() <= whence {
-                        debug!("Product {} has sale in past {} <= {}", self.description, itr_end.as_ref().unwrap(), whence);
+                        debug!("Product {} has sale in past ({:#?}) {} <= {}", self.description, self.end_date, itr_end.as_ref().unwrap(), whence);
                         return self.normal_price; // expired
                     }
                 }

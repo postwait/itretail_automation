@@ -18,13 +18,19 @@ lazy_static! {
 }
 
 pub fn make_listing(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<String> {
-    let mut output_file = args.get_one::<String>("menu").unwrap().to_string();
+    let menu = args.get_one::<String>("menu").unwrap().to_string();
+    let title = args.get_one::<String>("title");
+    let (output_file, req_cats) = 
     if let Some(pull) = args.get_one::<String>("pull") {
-        output_file = String::from(pull) + ".txt";
-    }
-    let cat_copy = output_file.clone();
-    let mut cat = cat_copy.split(".");
-    let cat_name = cat.nth(0).unwrap();
+        let cats: Vec<String> = pull.split(",").map(|s| { s.to_string() }).collect();
+        (menu, cats)
+    } else {
+        let output_file = args.get_one::<String>("menu").unwrap().to_string();
+        let cat_copy = output_file.clone();
+        let mut cat = cat_copy.split(".");
+        let cats: Vec<String> = [cat.nth(0).unwrap()].map(|s| { s.to_string() }).to_vec();
+        (output_file, cats)
+    };
     let json = api
         .get(&"/api/ProductsData/GetAllProducts".to_string())
         .expect("no results from API call");
@@ -47,23 +53,34 @@ pub fn make_listing(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<S
         .get_categories()
         .expect("no results from category request");
     let mut set = false;
-    for cat in cats {
-        if cat.text.is_some() && cat.text.unwrap().eq(cat_name) {
-            info!("Using {} for product list", cat_name);
-            for choice in cat.product_shortcuts {
-                if choice.keystrokes.is_some() {
-                    if let Some(item) = item_map.get(&choice.keystrokes.unwrap()) {
-                        menu_file
-                            .write(
-                                &format!("{} = ${:.2}/lb\r\n", item.description, item.get_price())
-                                    .as_bytes(),
-                            )
-                            .expect("writing menu item");
+    if title.is_some() {
+        menu_file.write(&format!("{}\r\n", title.unwrap()).as_bytes()).expect("writing title");
+    }
+    for cat_name in req_cats {
+        for cat in cats.iter() {
+            if cat.text.is_some() && cat.text.as_ref().unwrap().eq(&cat_name) {
+                info!("Using {} for product list", cat_name);
+                if set {
+                    menu_file.write("\r\n".as_bytes()).expect("writing spacer");
+                }
+                if title.is_none() {
+                    menu_file.write(&format!("{}\r\n", cat_name).as_bytes()).expect("writing category title");
+                }
+                for choice in cat.product_shortcuts.iter() {
+                    if choice.keystrokes.is_some() {
+                        if let Some(item) = item_map.get(choice.keystrokes.as_ref().unwrap()) {
+                            menu_file
+                                .write(
+                                    &format!("{} = ${:.2}/lb\r\n", item.description, item.get_price())
+                                        .as_bytes(),
+                                )
+                                .expect("writing menu item");
+                        }
                     }
                 }
+                set = true;
+                break;
             }
-            set = true;
-            break;
         }
     }
     if !set {

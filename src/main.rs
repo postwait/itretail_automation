@@ -16,6 +16,23 @@ fn parse_date(arg: &str) -> Result<NaiveDate,ParseError> {
     dt
 }
 
+#[cfg(windows)]
+fn scale_export(mut api: &mut internal::api::ITRApi, settings: &internal::settings::Settings, scmd: &clap::ArgMatches) {
+    let mut scale_file = internal::cas::Scales {};
+    let r = scale_file.send(&mut api, &settings, &scmd);
+    if r.is_err() {
+        error!("Error: {}", r.err().unwrap());
+        std::process::exit(exitcode::SOFTWARE);
+    }
+    std::process::exit(exitcode::OK);
+}
+
+#[cfg(not(windows))]
+#[allow(unused_variables)]
+fn scale_export(api: &mut internal::api::ITRApi, settings: &internal::settings::Settings, scmd: &clap::ArgMatches) {
+    error!("CAS Scale integration only supported on Windows.")
+}
+
 fn main() {
     let mut cmd = Command::new("itretail_automation")
         .author("Theo Schlossnagle, jesus@lethargy.org")
@@ -464,15 +481,7 @@ fn main() {
                 std::process::exit(exitcode::SOFTWARE);
             }
         }
-        Some(("scale-export", scmd)) => {
-            let mut scale_file = internal::cas::Scales {};
-            let r = scale_file.send(&mut api, &settings, &scmd);
-            if r.is_err() {
-                error!("Error: {}", r.err().unwrap());
-                std::process::exit(exitcode::SOFTWARE);
-            }
-            std::process::exit(exitcode::OK);
-        }
+        Some(("scale-export", scmd)) => { scale_export(&mut api, &settings, &scmd) }
         Some(("get-plu", scmd)) => {
             let mut label_file = internal::label::create_label_file(&"".to_owned());
             let results = api

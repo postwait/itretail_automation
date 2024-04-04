@@ -10,6 +10,17 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 
+#[cfg(not(windows))]
+macro_rules! font_filename{
+    ()=>{"/usr/share/fonts/truetype/office/MAIAN.TTF"}
+}
+
+#[cfg(windows)]
+macro_rules! font_filename{
+    ()=>{r#"C:\Windows\Fonts\MAIAN.TTF"#}
+}
+
+
 lazy_static! {
     static ref DEFAULT_BACKDROP: image::ImageBuffer<Rgba<u8>, Vec<u8>> =
         image::load_from_memory(include_bytes!("../assets/backdrop.png"))
@@ -109,7 +120,7 @@ pub fn make_menu(
         None => DEFAULT_BACKDROP.clone(),
     };
 
-    let font = Vec::from(include_bytes!("C:\\Windows\\Fonts\\MAIAN.TTF") as &[u8]);
+    let font = Vec::from(include_bytes!(font_filename!()) as &[u8]);
     let font = Font::try_from_vec(font).unwrap();
 
     let height = 60.0;

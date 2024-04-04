@@ -1,5 +1,6 @@
 pub mod api;
 pub mod localexpress;
+#[cfg(target_os = "windows")]
 pub mod cas;
 pub mod customer;
 pub mod sidedb;

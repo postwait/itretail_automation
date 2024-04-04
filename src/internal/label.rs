@@ -138,6 +138,11 @@ impl LabelFile {
                     "qoh" => {
                         worksheet.write_number_with_format(row, cidx, item.quantity_on_hand.unwrap_or(0.0), &weight_format)?;
                     },
+                    "cost" => {
+                        if item.cost.is_some() {
+                            worksheet.write_number_with_format(row, cidx, item.cost.unwrap(), &price_format)?;
+                        }
+                    }
                     _ => {
                         return Err(anyhow!("Unknown header: {}", h))
                     }

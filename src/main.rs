@@ -586,9 +586,33 @@ fn main() {
                 },
                 _ => {}
             }
-            let r = leapi.get_orders();
+            let r = leapi.get_current_orders();
             if r.is_ok() {
-                info!("{:#?}", r.unwrap());
+                let orders = r.unwrap();
+                let new_order_cnt = orders.iter().fold(0, |a,x| { if x.status == "new" { a + 1 } else { a + 0 } });
+                let today = Local::now().date_naive();
+                let todays_unfinished_cnt = orders.iter().fold(0, |a, x| {
+                    if x.delivery_date == today && x.status != "canceled" && x.status != "assembled" && x.status != "packed" {
+                        a + 1
+                    }
+                    else {
+                        a + 0
+                    }
+
+                });
+                debug!("{:#?}", orders);
+                info!("New Orders: {}", new_order_cnt);
+                info!("Today's Unfinished Orders: {}", todays_unfinished_cnt);
+                let mut light1 = internal::tasmota::new_light(settings.tasmota.light1);
+                match light1.power(todays_unfinished_cnt > 0) {
+                    Err(e) => error!("Error actuating light1: {}", e.to_string()),
+                    Ok(_) => {}
+                }
+                let mut light2 = internal::tasmota::new_light(settings.tasmota.light2);
+                match light2.power(new_order_cnt > 0) {
+                    Err(e) => error!("Error actuating light2: {}", e.to_string()),
+                    Ok(_) => {}
+                }
                 std::process::exit(exitcode::OK);
             }
             error!("Error fetching LocalExpress orders: {}", r.err().unwrap());

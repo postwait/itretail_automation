@@ -8,3 +8,4 @@ pub mod label;
 pub mod loyalty;
 pub mod settings;
 pub mod tvmenu;
+pub mod tasmota;

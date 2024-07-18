@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use fancy_regex::Regex;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{NaiveDate, NaiveDateTime, Local, Days, Months};
 use home;
 use log::*;
 use reqwest;
@@ -402,7 +402,16 @@ impl LEApi {
         let filter = json!({});//"filter":{"status":["new","confirmed","assembling","assembled","packing","packed"]},"filterType":"basic"});
         let r = self.post_json(&endpoint, &filter)?;
         let response: OrdersResponse = serde_json::from_str(&r)?;
-        println!("{:#?}", response.data.result);
+        Ok(response.data.result)
+    }
+
+    pub fn get_current_orders(&mut self) -> Result<Vec<Order>> {
+        let yesterday = Local::now().date_naive().checked_sub_days(Days::new(1)).unwrap();
+        let future = yesterday.checked_add_months(Months::new(3)).unwrap();
+        let endpoint = "/rest/v2/store/all/order?expand=productsCount,driverName&perPage=50&page=0".to_string();
+        let filter = json!({"filter":{"creation_date":[yesterday.format("%Y-%m-%d").to_string(),future.format("%Y-%m-%d").to_string()]},"filterType":"basic"});
+        let r = self.post_json(&endpoint, &filter)?;
+        let response: OrdersResponse = serde_json::from_str(&r)?;
         Ok(response.data.result)
     }
 }

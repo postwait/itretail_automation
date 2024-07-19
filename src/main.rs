@@ -592,7 +592,7 @@ fn main() {
                 let new_order_cnt = orders.iter().fold(0, |a,x| { if x.status == "new" { a + 1 } else { a + 0 } });
                 let today = Local::now().date_naive();
                 let todays_unfinished_cnt = orders.iter().fold(0, |a, x| {
-                    if x.delivery_date == today && x.status != "canceled" && x.status != "assembled" && x.status != "packed" {
+                    if x.delivery_date == today && x.status != "canceled" && x.status != "assembled" && x.status != "packed" && x.status != "delivering" {
                         a + 1
                     }
                     else {

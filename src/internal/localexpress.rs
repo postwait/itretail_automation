@@ -95,6 +95,13 @@ pub struct Order {
     pub delivery_date: NaiveDate,
     pub delivery_time_period: String,
 }
+
+impl Order {
+    pub fn active(&self) -> bool {
+        self.status != "canceled" && self.status != "assembled" && self.status != "packed" && self.status != "delivering" && self.status != "delivered" && self.status != "picked_up"
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct BearerToken {
     access_token: String,

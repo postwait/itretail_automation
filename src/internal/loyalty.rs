@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use clap::ArgMatches;
 use log::*;
-use uuid::Uuid;
 use rust_decimal::prelude::*;
+use uuid::Uuid;
 
 pub fn spend_180_to_discount(spend: f64) -> u8 {
     match spend {
@@ -50,17 +50,22 @@ pub fn apply_discounts(
     }
     let mut changes = 0;
     let mut inc = 0;
+    let mut del = 0;
     for (cid, customer) in &customers {
         let spend = txn_totals.get(&cid).unwrap_or(&0.0);
+        let loyalty_points = (*spend / normalize).round() as i32;
         let discount = spend_180_to_discount(*spend / normalize);
         let existing_discount = customer.discount.unwrap_or(0);
-        if existing_discount != discount {
-            changes += 1;
+        let existing_loyalty_points = customer.loyalty_points.unwrap_or(0);
+        if existing_discount != discount || existing_loyalty_points != loyalty_points {
+            if existing_discount != discount {
+                changes += 1;
+            }
             if discount > existing_discount {
                 inc += 1;
             }
             debug!(
-                "{} / {} -> ${:.02} (normalized ${:.02}) ({}% -> {}%)",
+                "{} / {} -> ${:.02} (normalized ${:.02}) (LP: {} -> {}) ({}% -> {}%)",
                 customer.id,
                 customer
                     .email
@@ -68,12 +73,34 @@ pub fn apply_discounts(
                     .unwrap_or(customer.phone.as_ref().unwrap_or(&"no id".to_owned())),
                 spend,
                 *spend / normalize,
+                existing_loyalty_points,
+                loyalty_points,
                 existing_discount,
                 discount
             );
-            if let Ok(mut newc) = api.get_customer(&customer.id) {
+            if let Ok(mut newco) = api.get_customer(&customer.id) {
+                if newco.is_none() {
+                    // user is deleted
+                    info!(
+                        "Customer {} / {} no longer in IT Retail",
+                        customer.id,
+                        customer
+                            .email
+                            .as_ref()
+                            .unwrap_or(customer.phone.as_ref().unwrap_or(&"no id".to_owned()))
+                    );
+
+                    let dr = sidedb.delete_customer(&customer.id);
+                    if dr.is_ok() && dr.unwrap() {
+                        info!("Marked {} as deleted.", customer.id);
+                        del += 1;
+                    }
+                    continue;
+                }
+                let newc = newco.as_mut().unwrap();
                 // this is needed b/c our customer is skeletal
                 newc.discount = Some(discount);
+                newc.loyalty_points = Some(loyalty_points);
                 let r = api.update_customer(&newc);
                 if r.is_err() {
                     warn!(

@@ -641,7 +641,7 @@ fn main() {
                     } else {
                         let ro = 
                         if full_customer {
-                            sidedb.store_customers(r.unwrap().into_iter().filter_map(|x| api.get_customer(&x.id).ok()))
+                            sidedb.store_customers(r.unwrap().into_iter().filter_map(|x| api.get_customer(&x.id).ok().unwrap()))
                         } else {
                             sidedb.store_customers(r.unwrap().into_iter())
                         };

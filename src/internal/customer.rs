@@ -532,7 +532,11 @@ pub fn mailchimp_sync(
                         );
                         continue;
                     }
-                    let mut newc = newc_r.unwrap();
+                    if newc_r.as_ref().unwrap().is_none() {
+                        // user is deleted
+                        continue;
+                    }
+                    let mut newc = newc_r.unwrap().unwrap();
                     newc.phone = Some(normalize_phone(&mc_phone));
                     let r = api.update_customer(&newc);
                     if r.is_err() {

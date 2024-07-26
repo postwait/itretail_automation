@@ -533,9 +533,12 @@ impl ITRApi {
         Ok(answer.value)
     }
 
-    pub fn get_customer(&mut self, cid: &Uuid) -> Result<Customer> {
+    pub fn get_customer(&mut self, cid: &Uuid) -> Result<Option<Customer>> {
         let url = format!("/api/CustomersData/GetOne/?Id={}", cid);
         let results = self.get(&url).expect("no results from API call");
+        if results.trim() == "null" {
+            return Ok(None);
+        }
         let customer: Result<Customer, serde_json::Error> = serde_json::from_str(&results);
         if customer.is_err() {
             warn!(
@@ -545,7 +548,7 @@ impl ITRApi {
             );
             return Err(customer.err().unwrap().into());
         }
-        Ok(customer.unwrap())
+        Ok(Some(customer.unwrap()))
     }
 
     pub fn get_sections(&mut self) -> Result<Vec<Section>> {

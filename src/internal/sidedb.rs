@@ -132,6 +132,10 @@ impl SideDb {
         txn.commit()?;
         Ok(cnt)
     }
+    pub fn delete_customer(&mut self, id: &Uuid) -> Result<bool> {
+        let rc = self.client.execute("UPDATE customer SET deleted=true WHERE customer_id = $1", &[id])?;
+        Ok(rc > 0)
+    }
     pub fn get_customers(&mut self) -> Result<Vec<Customer>> {
         let rows = self.client.query("SELECT * FROM customer WHERE NOT deleted", &[])?;
         let customers = rows.iter().map(|x| {
@@ -265,12 +269,31 @@ impl SideDb {
     }
 
     pub fn get_spend(&mut self, days: u32) -> Result<Vec<(Uuid, Decimal)>> {
+        /* This query pull total spend for customers (by customer id) from itretail and
+           joins that with the total spend from localexpress with a hopeful conversion of localexpress
+           email address to (preferrably undeleted) itretail customer id. */
         let rows = self.client.query("select customer_id, sum(total) as total
-                                from itrejtxn
+  from
+((select customer_id, sum(total) as total
+                                from itrejtxn join customer using(customer_id)
+	                            
                                 where canceled = false
                                   and transaction_date > current_timestamp - ($1::integer * INTERVAL '1 days')
                                   and customer_id is not null
-                                group by customer_id", &[&(days as i32)])?;
+                                group by customer_id)
+union
+(select customer_id, sum(total) as total
+  from leorder
+  join (select customer_id, email as customer_email
+	      from (select row_number() over (PARTITION BY email order by deleted) as rn, *
+	              from customer
+	             where email is not null and length(email) > 0)
+	     where rn = 1) cm
+ using (customer_email)
+ where status in ('picked_up','delivered') and delivery_date > current_timestamp - ($1::integer * INTERVAL '1 days')
+group by customer_id))
+group by customer_id",
+                                &[&(days as i32)])?;
         let vec = rows.iter().map(|x| (x.get(0), x.get::<usize,Decimal>(1))).collect();
         Ok(vec)
     }

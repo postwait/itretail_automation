@@ -113,8 +113,8 @@ pub fn apply_discounts(
         }
     }
     info!(
-        "{} customers changed loyalty status, {} increased.",
-        changes, inc
+        "{} customers changed loyalty status, {} increased, {} deleted.",
+        changes, inc, del
     );
 
     Ok(())

@@ -163,7 +163,7 @@ enum DfState {
 }
 
 #[repr(C)]
-#[allow(non_camel_case_types, non_snake_case)]
+#[allow(non_camel_case_types, non_snake_case, dead_code)]
 #[derive(Debug)]
 pub struct TD_ST_TRANSDATA_V01 {
     shScaleID: std::ffi::c_short,

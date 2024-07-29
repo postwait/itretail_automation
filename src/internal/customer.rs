@@ -17,15 +17,22 @@ pub struct Tag {
 pub struct Member {
     pub id: String,
     pub email_address: String,
+    #[allow(dead_code)]
     pub unique_email_id: String,
+    #[allow(dead_code)]
     pub contact_id: String,
+    #[allow(dead_code)]
     pub full_name: String,
+    #[allow(dead_code)]
     pub email_type: String,
     pub status: String,
+    #[allow(dead_code)]
     pub unsubscribe_reason: Option<String>,
     pub merge_fields: serde_json::Map<String, serde_json::Value>,
+    #[allow(dead_code)]
     pub interests: serde_json::Map<String, serde_json::Value>,
     pub source: String,
+    #[allow(dead_code)]
     pub tags: Vec<Tag>,
 }
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -48,6 +55,7 @@ pub struct Members {
 #[derive(Deserialize, Debug, Clone)]
 pub struct MCList {
     pub id: String,
+    #[allow(dead_code)]
     pub name: String,
 }
 #[derive(Deserialize, Debug)]

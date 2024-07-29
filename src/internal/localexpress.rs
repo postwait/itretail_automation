@@ -60,6 +60,7 @@ mod le_datetime_format {
     }
 }
 #[derive(Serialize)]
+#[allow(dead_code)]
 struct Empty {}
 #[derive(Deserialize, Debug)]
 #[allow(dead_code)]

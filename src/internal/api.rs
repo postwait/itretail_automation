@@ -37,6 +37,7 @@ pub struct MinimalCustomer {
 pub struct Section {
     pub id: u32,
     pub name: String,
+    #[allow(dead_code)]
     pub deleted: bool,
 }
 #[derive(Deserialize, Debug)]
@@ -68,8 +69,10 @@ pub struct EJTxnProduct {
 pub struct EJTxn {
     #[serde(rename = "Id")]
     pub id: Uuid,
+    #[allow(dead_code)]
     #[serde(rename = "CustomerLastName")]
     pub customer_last_name: Option<String>,
+    #[allow(dead_code)]
     #[serde(rename = "CustomerFirstName")]
     pub customer_first_name: Option<String>,
     #[serde(rename = "CustomerId")]

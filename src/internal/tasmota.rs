@@ -15,7 +15,7 @@ impl Light {
         let res = client.get(format!("http://{}/cm?cmnd=Power%20{}", self.ip, if state { "on" } else { "off" })).send();
         match res {
             Ok(result) => {
-                let res = result.text();
+                result.text()?;
                 Ok(())
             },
             Err(e) => Err(anyhow!("{}", e.to_string())),

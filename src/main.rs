@@ -58,15 +58,18 @@ fn main() {
         .arg(Arg::new("leusername").long("leusername"))
         .arg(Arg::new("lepassword").long("lepassword"))
         .subcommand(
-            Command::new("loyalty").arg(
-                Arg::new("days")
+            Command::new("loyalty")
+            .arg(Arg::new("days")
                     .long("days")
                     .short('d')
                     .action(ArgAction::Set)
                     .value_name("DAYS")
                     .value_parser(clap::value_parser!(u32))
-                    .default_value("180"),
-            ),
+                    .default_value("180"))
+            .arg(Arg::new("noop")
+                    .short('n')
+                    .action(ArgAction::SetTrue)
+                    .num_args(0))
         )
         .subcommand(
             Command::new("sidedb-sync")

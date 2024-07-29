@@ -4,6 +4,7 @@ use rust_decimal::prelude::*;
 use chrono::{NaiveDate, NaiveDateTime};
 use log::*;
 use uuid::Uuid;
+use std::collections::HashMap;
 
 use super::api::{Customer, ProductData};
 
@@ -59,10 +60,19 @@ impl SideDb {
     where
         I: Iterator<Item = super::api::Customer>,
     {
-        let mut txn = self.client.transaction()?;
+        let existing = { self.get_customers()? };
+        let mut to_delete: HashMap<Uuid, &Customer> = HashMap::new();
+        for c in existing.iter() {
+           to_delete.insert(c.id, &c);
+        }
+        let total_db_size = to_delete.len() as f64;
+
+        let mut txn = { self.client.transaction()? };
         let mut cnt = 0;
+
         for c in customers {
             debug!("copying {}", c.email.as_ref().unwrap_or(&"<unknown>".to_string()));
+            to_delete.remove(&c.id);
             let bd = match c.birth_date.as_ref() {
                 Some(d) => {
                     match NaiveDate::parse_from_str(&d, "%Y-%m-%d") {
@@ -130,11 +140,27 @@ impl SideDb {
             cnt = cnt + re as u32;
         }
         txn.commit()?;
+        if to_delete.len() as f64 / total_db_size > 0.02 {
+            error!("We want to delete {} customers out of {}, that's scary high. You'll need to do that manually.",
+                   to_delete.len(), total_db_size);
+        }
+        else {
+            info!("Marking {} customers as deleted.", to_delete.len());
+            for (id, c) in to_delete {
+                info!("Marking {} ({} {} {} {}) as deleted.", id, c.first_name, c.last_name, c.email.as_ref().unwrap_or(&"n/a".to_string()), c.phone.as_ref().unwrap_or(&"n/a".to_string()));
+                self.delete_customer(&id);
+            }
+        }
         Ok(cnt)
     }
     pub fn delete_customer(&mut self, id: &Uuid) -> Result<bool> {
         let rc = self.client.execute("UPDATE customer SET deleted=true WHERE customer_id = $1", &[id])?;
         Ok(rc > 0)
+    }
+    pub fn get_customer_household(&mut self) -> Result<Vec<(Uuid, Uuid)>> {
+        let rows = self.client.query("SELECT main, resident FROM customer_house", &[])?;
+        let rels = rows.iter().map(|x| { (x.get("main"), x.get("resident")) }).collect();
+        Ok(rels)
     }
     pub fn get_customers(&mut self) -> Result<Vec<Customer>> {
         let rows = self.client.query("SELECT * FROM customer WHERE NOT deleted", &[])?;

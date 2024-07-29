@@ -33,7 +33,12 @@ pub fn apply_discounts(
     args: &ArgMatches,
 ) -> Result<()> {
     let days = args.get_one::<u32>("days").unwrap();
+    let noop = args.get_one::<bool>("noop").unwrap();
     let normalize = (*days as f64) / 180.0;
+    let mut hoh_lookup: HashMap<Uuid,Uuid> = HashMap::new();
+    for hoh in sidedb.get_customer_household()? {
+        hoh_lookup.insert(hoh.1, hoh.0);
+    }
     let spend_vec = sidedb.get_spend(*days)?;
     let customer_vec = sidedb.get_customers()?;
     let mut customers = HashMap::new();
@@ -42,17 +47,28 @@ pub fn apply_discounts(
     }
     let mut txn_totals: HashMap<Uuid, f64> = HashMap::new();
     for t in spend_vec.iter() {
-        if let Some(rec) = txn_totals.get_mut(&t.0) {
+        let hoh = match hoh_lookup.get(&t.0) {
+            Some(head) => head,
+            None => &t.0
+        };
+        if *hoh != t.0 {
+            info!("pushing {}'s {} to heah of household {}", t.0, t.1, hoh);
+        }
+        if let Some(rec) = txn_totals.get_mut(hoh) {
             *rec += t.1.to_f64().unwrap();
         } else {
-            txn_totals.insert(t.0.clone(), t.1.to_f64().unwrap());
+            txn_totals.insert(hoh.clone(), t.1.to_f64().unwrap());
         }
     }
     let mut changes = 0;
     let mut inc = 0;
     let mut del = 0;
     for (cid, customer) in &customers {
-        let spend = txn_totals.get(&cid).unwrap_or(&0.0);
+        let hoh = match hoh_lookup.get(cid) {
+            Some(head) => head,
+            None => cid
+        };
+        let spend = txn_totals.get(hoh).unwrap_or(&0.0);
         let loyalty_points = (*spend / normalize).round() as i32;
         let discount = spend_180_to_discount(*spend / normalize);
         let existing_discount = customer.discount.unwrap_or(0);
@@ -78,6 +94,9 @@ pub fn apply_discounts(
                 existing_discount,
                 discount
             );
+            if *noop {
+                continue;
+            }
             if let Ok(mut newco) = api.get_customer(&customer.id) {
                 if newco.is_none() {
                     // user is deleted

@@ -19,6 +19,12 @@ pub struct LocalExpress {
 
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
+pub struct Stripe {
+    pub secret: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(unused)]
 pub struct Mailchimp {
     pub token: String,
     pub dc: String,
@@ -52,6 +58,7 @@ pub struct Settings {
     pub mailchimp: Mailchimp,
     pub postgres: Postgres,
     pub scales: Scales,
+    pub stripe: Stripe,
     pub tasmota: Tasmota,
 }
 
@@ -83,6 +90,7 @@ impl Settings {
             .set_default("mailchimp.dc", "us21")?
             .set_default("scales.addresses", Vec::<String>::with_capacity(0))?
             .set_default("scales.timeout_seconds", 300)?
+            .set_default("stripe.secret", "")?
             .set_default("tasmota.light1", "192.168.202.7")?
             .set_default("tasmota.light2", "192.168.202.151")?
             .build()?;

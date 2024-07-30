@@ -4,6 +4,7 @@ use chrono::{DateTime, Local, NaiveDateTime, NaiveDate, ParseError, TimeZone};
 use clap::{Arg, ArgAction, Command};
 use log::*;
 use simplelog::*;
+use stripe::generated::billing::subscriptions_trials_resource_trial_settings;
 use std::fs::OpenOptions;
 use std::{env, fs, thread, time};
 
@@ -77,6 +78,10 @@ fn main() {
                          .long("customers")
                          .action(ArgAction::SetTrue)
                          .num_args(0))
+                .arg(Arg::new("customers-stripe")
+                         .long("customers-stripe")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
                 .arg(Arg::new("customers-full")
                          .long("customers-full")
                          .action(ArgAction::SetTrue)
@@ -97,6 +102,10 @@ fn main() {
                          .value_parser(parse_timestamp))
                 .arg(Arg::new("products")
                          .long("products")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
+                .arg(Arg::new("products-stripe")
+                         .long("products-stripe")
                          .action(ArgAction::SetTrue)
                          .num_args(0))
                 .arg(Arg::new("orders")
@@ -625,16 +634,26 @@ fn main() {
             let mut sidedb = internal::sidedb::make_sidedb(&settings).unwrap();
             let period = *scmd.get_one::<u32>("period").unwrap();
             let do_products = scmd.get_flag("products");
+            let do_stripe_products = scmd.get_flag("products-stripe");
             let do_customers = scmd.get_flag("customers");
+            let do_stripe_customers = scmd.get_flag("customers-stripe");
             let full_customer = scmd.get_flag("customers-full");
             let do_txns = scmd.get_flag("transactions");
             let do_orders = scmd.get_flag("orders");
-            let do_all = !do_txns && !do_orders && !do_products && !do_customers && !full_customer;
+            let do_all = !do_txns && !do_orders && !do_products && !do_customers && !full_customer && !do_stripe_customers && !do_stripe_products;
 
             let mut progress = false;
             info!("Starting sync process.");
 
             loop {
+                if do_stripe_customers || do_all {
+                    info!("Starting stripe sync.");
+                    let r = internal::stripe::stripe_connect_create(&settings);
+                    match r.sync_with_sidedb(&mut sidedb) {
+                        Ok(v) => info!("Synced up {}, upddated {}", v.added_up, v.updated_up),
+                        Err(e) => error!("Stripe customer sync error: {}", e)
+                    }
+                }
                 if do_customers || full_customer || do_all {
                     info!("Starting customer sync.");
                     let r= api.get_customers();

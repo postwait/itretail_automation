@@ -146,7 +146,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778a8eb944d12469a3a2e93cf3738c90320f7e17db32c0790b3b191a2b7bfc22"
 dependencies = [
  "chrono",
- "futures-util",
  "hex",
  "hmac",
  "http-types",

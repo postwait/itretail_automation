@@ -148,13 +148,21 @@ impl SideDb {
             info!("Marking {} customers as deleted.", to_delete.len());
             for (id, c) in to_delete {
                 info!("Marking {} ({} {} {} {}) as deleted.", id, c.first_name, c.last_name, c.email.as_ref().unwrap_or(&"n/a".to_string()), c.phone.as_ref().unwrap_or(&"n/a".to_string()));
-                self.delete_customer(&id);
+                self.delete_customer(&id)?;
             }
         }
         Ok(cnt)
     }
+    pub fn associate_customer_with_stripe(&mut self, id: &Uuid, stripe_id: &String) -> Result<bool> {
+        let mut txn = self.client.transaction()?;
+        let rc = txn.execute("UPDATE customer SET stripe_customer_id=$1 WHERE customer_id = $2", &[stripe_id, id])?;
+        txn.commit()?;
+        Ok(rc > 0)
+    }
     pub fn delete_customer(&mut self, id: &Uuid) -> Result<bool> {
-        let rc = self.client.execute("UPDATE customer SET deleted=true WHERE customer_id = $1", &[id])?;
+        let mut txn = self.client.transaction()?;
+        let rc = txn.execute("UPDATE customer SET deleted=true WHERE customer_id = $1", &[id])?;
+        txn.commit()?;
         Ok(rc > 0)
     }
     pub fn get_customer_household(&mut self) -> Result<Vec<(Uuid, Uuid)>> {

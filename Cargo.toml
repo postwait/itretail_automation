@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.71"
-async-stripe = { version = "0.37.2", features = ["runtime-tokio-hyper-rustls"] }
+async-stripe = { version = "0.37.2", features = ["runtime-blocking-rustls"] }
 chrono = "0.4.24"
 clap = "4.2.7"
 config = "0.13.3"

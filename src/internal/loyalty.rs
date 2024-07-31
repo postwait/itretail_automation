@@ -26,7 +26,7 @@ pub fn spend_180_to_discount(spend: f64) -> u8 {
     }
 }
 
-pub fn apply_discounts(
+pub async fn apply_discounts(
     api: &mut super::api::ITRApi,
     sidedb: &mut super::sidedb::SideDb,
     _settings: &super::settings::Settings,
@@ -36,11 +36,11 @@ pub fn apply_discounts(
     let noop = args.get_one::<bool>("noop").unwrap();
     let normalize = (*days as f64) / 180.0;
     let mut hoh_lookup: HashMap<Uuid,Uuid> = HashMap::new();
-    for hoh in sidedb.get_customer_household()? {
+    for hoh in sidedb.get_customer_household().await? {
         hoh_lookup.insert(hoh.1, hoh.0);
     }
-    let spend_vec = sidedb.get_spend(*days)?;
-    let customer_vec = sidedb.get_customers()?;
+    let spend_vec = sidedb.get_spend(*days).await?;
+    let customer_vec = sidedb.get_customers().await?;
     let mut customers = HashMap::new();
     for c in customer_vec.iter() {
         customers.insert(c.id.clone(), c);
@@ -97,7 +97,7 @@ pub fn apply_discounts(
             if *noop {
                 continue;
             }
-            if let Ok(mut newco) = api.get_customer(&customer.id) {
+            if let Ok(mut newco) = api.get_customer(&customer.id).await {
                 if newco.is_none() {
                     // user is deleted
                     info!(
@@ -109,7 +109,7 @@ pub fn apply_discounts(
                             .unwrap_or(customer.phone.as_ref().unwrap_or(&"no id".to_owned()))
                     );
 
-                    let dr = sidedb.delete_customer(&customer.id);
+                    let dr = sidedb.delete_customer(&customer.id).await;
                     if dr.is_ok() && dr.unwrap() {
                         info!("Marked {} as deleted.", customer.id);
                         del += 1;
@@ -120,7 +120,7 @@ pub fn apply_discounts(
                 // this is needed b/c our customer is skeletal
                 newc.discount = Some(discount);
                 newc.loyalty_points = Some(loyalty_points);
-                let r = api.update_customer(&newc);
+                let r = api.update_customer(&newc).await;
                 if r.is_err() {
                     warn!(
                         "Error updating IT Retail discount for {}: {}",

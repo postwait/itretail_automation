@@ -2,7 +2,7 @@ use config::{Config, ConfigError, Environment, File};
 use serde_derive::Deserialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct ITRetail {
     pub username: String,
@@ -10,41 +10,75 @@ pub struct ITRetail {
     pub store_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct LocalExpress {
     pub username: String,
     pub password: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Mailchimp {
     pub token: String,
     pub dc: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Scales {
     pub addresses: Vec<String>,
     pub timeout_seconds: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub enum SquareEnvironment {
+    Production,
+    Sandbox,
+}
+/*
+impl From<SquareEnvironment> for config::ValueKind {
+    fn from(item: SquareEnvironment) -> Self {
+        match item {
+            SquareEnvironment::Production => config::ValueKind::String(String::from("production")),
+            SquareEnvironment::Sandbox => config::ValueKind::String(String::from("sandbox"))
+        }
+    }
+}
+    */
+impl Into<config::ValueKind> for SquareEnvironment {
+    fn into(self) -> config::ValueKind {
+        match self {
+            SquareEnvironment::Production => config::ValueKind::String(String::from("production")),
+            SquareEnvironment::Sandbox => config::ValueKind::String(String::from("sandbox"))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct Square {
+    pub environment: SquareEnvironment,
+    pub sandbox_secret: String,
+    pub production_secret: String,
+    pub max_retries: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Postgres {
     pub connect_string: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Tasmota {
     pub light1: String,
     pub light2: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Settings {
     pub itretail: ITRetail,
@@ -52,6 +86,7 @@ pub struct Settings {
     pub mailchimp: Mailchimp,
     pub postgres: Postgres,
     pub scales: Scales,
+    pub square: Square,
     pub tasmota: Tasmota,
 }
 
@@ -83,6 +118,10 @@ impl Settings {
             .set_default("mailchimp.dc", "us21")?
             .set_default("scales.addresses", Vec::<String>::with_capacity(0))?
             .set_default("scales.timeout_seconds", 300)?
+            .set_default("square.environment", SquareEnvironment::Sandbox)?
+            .set_default("square.sandbox_secret", "")?
+            .set_default("square.production_secret", "")?
+            .set_default("square.max_retries", 3)?
             .set_default("tasmota.light1", "192.168.202.7")?
             .set_default("tasmota.light2", "192.168.202.151")?
             .build()?;

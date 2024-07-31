@@ -1,5 +1,6 @@
 mod internal;
 
+use tokio;
 use chrono::{DateTime, Local, NaiveDateTime, NaiveDate, ParseError, TimeZone};
 use clap::{Arg, ArgAction, Command};
 use log::*;
@@ -17,9 +18,9 @@ fn parse_date(arg: &str) -> Result<NaiveDate,ParseError> {
 }
 
 #[cfg(windows)]
-fn scale_export(mut api: &mut internal::api::ITRApi, settings: &internal::settings::Settings, scmd: &clap::ArgMatches) {
+async fn scale_export(mut api: &mut internal::api::ITRApi, settings: &internal::settings::Settings, scmd: &clap::ArgMatches) {
     let mut scale_file = internal::cas::Scales {};
-    let r = scale_file.send(&mut api, &settings, &scmd);
+    let r = scale_file.send(&mut api, &settings, &scmd).await;
     if r.is_err() {
         error!("Error: {}", r.err().unwrap());
         std::process::exit(exitcode::SOFTWARE);
@@ -33,7 +34,9 @@ fn scale_export(api: &mut internal::api::ITRApi, settings: &internal::settings::
     error!("CAS Scale integration only supported on Windows.")
 }
 
-fn main() {
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut cmd = Command::new("itretail_automation")
         .author("Theo Schlossnagle, jesus@lethargy.org")
         .version("0.0.1")
@@ -77,6 +80,10 @@ fn main() {
                          .long("customers")
                          .action(ArgAction::SetTrue)
                          .num_args(0))
+                .arg(Arg::new("customers-square")
+                         .long("customers-square")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
                 .arg(Arg::new("customers-full")
                          .long("customers-full")
                          .action(ArgAction::SetTrue)
@@ -97,6 +104,10 @@ fn main() {
                          .value_parser(parse_timestamp))
                 .arg(Arg::new("products")
                          .long("products")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
+                .arg(Arg::new("products-square")
+                         .long("products-square")
                          .action(ArgAction::SetTrue)
                          .num_args(0))
                 .arg(Arg::new("orders")
@@ -445,9 +456,8 @@ fn main() {
     }
     let mut api = handle.ok().unwrap();
 
-    let auth_err = api.auth().err();
-    if auth_err.is_some() {
-        let err = auth_err.unwrap();
+    let auth_result = api.auth().await;
+    if let Some(err) = auth_result.err() {
         if err.to_string().contains("no username provided") {
             println!(
                 r"A username is needed and is not present in the environment. Add one.
@@ -472,23 +482,24 @@ fn main() {
 "
             )
         }
-        panic!("{}", err)
+        //panic!("{}", err)
     }
 
     match m.subcommand() {
         Some(("loyalty", scmd)) => {
-            let mut sidedb = internal::sidedb::make_sidedb(&settings).unwrap();
-            let r = internal::loyalty::apply_discounts(&mut api, &mut sidedb, &settings, &scmd);
+            let mut sidedb = internal::sidedb::make_sidedb(settings.clone()).await.unwrap();
+            let r = internal::loyalty::apply_discounts(&mut api, &mut sidedb, &settings, &scmd).await;
             if r.is_err() {
                 error!("Error reading electronic journal: {}", r.err().unwrap());
                 std::process::exit(exitcode::SOFTWARE);
             }
         }
-        Some(("scale-export", scmd)) => { scale_export(&mut api, &settings, &scmd) }
+        Some(("scale-export", scmd)) => { scale_export(&mut api, &settings, &scmd).await }
         Some(("get-plu", scmd)) => {
             let mut label_file = internal::label::create_label_file(&"".to_owned());
             let results = api
                 .get(&"/api/ProductsData/GetAllProducts".to_string())
+                .await
                 .expect("no results from API call");
             let r = label_file.output_from_itretail_products(&results, &scmd);
             if r.is_err() {
@@ -501,8 +512,8 @@ fn main() {
             let filename = scmd.get_one::<String>("output").unwrap();
             let asof = scmd.get_one::<NaiveDate>("as-of");
             let mut label_file = internal::label::create_label_file(filename);
-            let mut sidedb = internal::sidedb::make_sidedb(&settings).unwrap();
-            let items = sidedb.get_products(asof).unwrap();
+            let mut sidedb = internal::sidedb::make_sidedb(settings).await.unwrap();
+            let items = sidedb.get_products(asof).await.unwrap();
             let r = label_file.build_from_itretail_products(&items, &scmd);
             if r.is_err() {
                 error!("{}", r.err().unwrap());
@@ -511,7 +522,7 @@ fn main() {
             std::process::exit(exitcode::OK);
         }
         Some(("mailchimp-sync", scmd)) => {
-            let r = internal::customer::mailchimp_sync(&mut api, &settings, &scmd);
+            let r = internal::customer::mailchimp_sync(&mut api, &settings, &scmd).await;
             if r.is_err() {
                 error!("{:?}", r.err().unwrap());
                 std::process::exit(exitcode::SOFTWARE);
@@ -521,7 +532,7 @@ fn main() {
         Some(("tvmenu", scmd)) => {
             let (menu_file, output_file) = match scmd.get_one::<String>("pull") {
                 Some(cat) => {
-                    let r = internal::tvmenu::make_listing(&mut api, &scmd);
+                    let r = internal::tvmenu::make_listing(&mut api, &scmd).await;
                     if r.is_err() {
                         error!(
                             "Error constructing menu from IT Retail: {}",
@@ -569,7 +580,7 @@ fn main() {
                     upc: upc.unwrap().to_string(),
                     plu: plu,
                 };
-                let r = api.set_plu(vec![plu_assignment]);
+                let r = api.set_plu(vec![plu_assignment]).await;
                 if r.is_ok() {
                     std::process::exit(exitcode::OK);
                 }
@@ -622,14 +633,16 @@ fn main() {
             std::process::exit(exitcode::SOFTWARE);
         }
         Some(("sidedb-sync", scmd)) => {
-            let mut sidedb = internal::sidedb::make_sidedb(&settings).unwrap();
+            let mut sidedb = internal::sidedb::make_sidedb(settings.clone()).await.unwrap();
             let period = *scmd.get_one::<u32>("period").unwrap();
             let do_products = scmd.get_flag("products");
+            let do_square_products = scmd.get_flag("products-square");
             let do_customers = scmd.get_flag("customers");
+            let do_square_customers = scmd.get_flag("customers-square");
             let full_customer = scmd.get_flag("customers-full");
             let do_txns = scmd.get_flag("transactions");
             let do_orders = scmd.get_flag("orders");
-            let do_all = !do_txns && !do_orders && !do_products && !do_customers && !full_customer;
+            let do_all = !do_txns && !do_orders && !do_products && !do_customers && !full_customer && !do_square_customers && !do_square_products;
 
             let mut progress = false;
             info!("Starting sync process.");
@@ -637,16 +650,22 @@ fn main() {
             loop {
                 if do_customers || full_customer || do_all {
                     info!("Starting customer sync.");
-                    let r= api.get_customers();
+                    let r= api.get_customers().await;
                     if r.is_err() {
                         error!("Error fetching IT Retail customers: {}", r.err().unwrap());
                         std::process::exit(exitcode::SOFTWARE);
                     } else {
                         let ro = 
                         if full_customer {
-                            sidedb.store_customers(r.unwrap().into_iter().filter_map(|x| api.get_customer(&x.id).ok().unwrap()))
+                            let mut full_customers: Vec<internal::api::Customer> = vec![];
+                            for skel_c in &r.unwrap() {
+                                if let Some(full_c) = api.get_customer(&skel_c.id).await? {
+                                    full_customers.push(full_c);
+                                }
+                            }
+                            sidedb.store_customers(full_customers.into_iter()).await
                         } else {
-                            sidedb.store_customers(r.unwrap().into_iter())
+                            sidedb.store_customers(r.unwrap().into_iter()).await
                         };
                         if ro.is_err() {
                             error!("Failed to store IT Retail customers: {}", ro.err().unwrap());
@@ -657,18 +676,39 @@ fn main() {
                     }
                 }
 
+                if do_square_customers || do_all {
+                    info!("Starting square customer sync.");
+                    let r = internal::square::square_connect_create(&settings);
+                    match r.sync_customers_with_sidedb(&mut sidedb).await {
+                        Ok(v) => info!("Synced up {}, upddated {}", v.added_up, v.updated_up),
+                        Err(e) => error!("Square customer sync error: {}", e)
+                    }
+                }
+
                 if do_products || do_all {
                     info!("Starting product sync.");
-                    let results = api
-                        .get(&"/api/ProductsData/GetAllProducts".to_string())
-                        .expect("no results from API call");
-                    let r: Result<Vec<internal::api::ProductData>, serde_json::Error> = serde_json::from_str(&results);
+                    let r = api.get_tax().await;
+                    if r.is_err() {
+                        error!("Error fetching IT Retail taxes: {}", r.err().unwrap());
+                        std::process::exit(exitcode::SOFTWARE);
+                    } else {
+                        let taxes = r.unwrap();
+                        let ro = sidedb.store_taxes_itr(taxes.iter()).await;
+                        if ro.is_err() {
+                            error!("Failed to store IT Retail taxes: {}", ro.err().unwrap());
+                            std::process::exit(exitcode::SOFTWARE);
+                        } else {
+                            info!("Pushed {} IT Retail taxes.", ro.unwrap());
+                        }
+                    }
+
+                    let r= api.get_products().await;
                     if r.is_err() {
                         error!("Error fetching IT Retail products: {}", r.err().unwrap());
                         std::process::exit(exitcode::SOFTWARE);
                     } else {
                         let products = r.unwrap();
-                        let ro = sidedb.store_products(products.iter());
+                        let ro = sidedb.store_products(products.iter()).await;
                         if ro.is_err() {
                             error!("Failed to store IT Retail products: {}", ro.err().unwrap());
                             std::process::exit(exitcode::SOFTWARE);
@@ -677,6 +717,15 @@ fn main() {
                         }
                     }
                     progress = true;
+                }
+
+                if do_square_products || do_all {
+                    info!("Starting square product sync.");
+                    let r = internal::square::square_connect_create(&settings);
+                    match r.sync_products_with_sidedb(&mut sidedb).await {
+                        Ok(v) => info!("Synced up {}, upddated {}", v.added_up, v.updated_up),
+                        Err(e) => error!("Square customer sync error: {}", e)
+                    }
                 }
 
                 if do_txns || do_all {
@@ -699,13 +748,13 @@ fn main() {
                         },
                         None => None,
                     };
-                    let r = api.get_transactions_details(start, end);
+                    let r = api.get_transactions_details(start, end).await;
                     if r.is_err() {
                         error!("Error fetching IT Retail transactions: {}", r.err().unwrap());
                         std::process::exit(exitcode::SOFTWARE);
                     } else {
                         let txns = r.unwrap();
-                        let ro = sidedb.store_txns(txns.iter());
+                        let ro = sidedb.store_txns(txns.iter()).await;
                         if ro.is_err() {
                             error!("Failed to store IT Retail transactions: {}", ro.err().unwrap());
                             std::process::exit(exitcode::SOFTWARE);
@@ -741,7 +790,7 @@ fn main() {
                             error!("Error fetching LocalExpress orders: {}", r.err().unwrap());
                             std::process::exit(exitcode::SOFTWARE);
                         } else {
-                            let ro = sidedb.store_orders(r.unwrap().iter());
+                            let ro = sidedb.store_orders(r.unwrap().iter()).await;
                             if ro.is_err() {
                                 error!("Failed to store LE orders: {}", ro.err().unwrap());
                                 std::process::exit(exitcode::SOFTWARE);
@@ -759,6 +808,7 @@ fn main() {
                 }
                 thread::sleep(time::Duration::from_secs(period.into()));
             }
+            drop(sidedb);
             std::process::exit(exitcode::OK);
         }
         _ => {
@@ -766,4 +816,5 @@ fn main() {
             std::process::exit(exitcode::USAGE);
         }
     }
+    Ok(())
 }

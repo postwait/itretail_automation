@@ -28,7 +28,7 @@ lazy_static! {
             .into_rgba8();
 }
 
-pub fn make_listing(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<String> {
+pub async fn make_listing(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<String> {
     let menu = args.get_one::<String>("menu").unwrap().to_string();
     let title = args.get_one::<String>("title");
     let (output_file, req_cats) = 
@@ -44,6 +44,7 @@ pub fn make_listing(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<S
     };
     let json = api
         .get(&"/api/ProductsData/GetAllProducts".to_string())
+        .await
         .expect("no results from API call");
     let items: Vec<super::api::ProductData> = serde_json::from_str(&json)?;
     let items_iter = items.into_iter();
@@ -62,6 +63,7 @@ pub fn make_listing(api: &mut super::api::ITRApi, args: &ArgMatches) -> Result<S
         .expect("Could not open menu file");
     let cats: Vec<super::api::Category> = api
         .get_categories()
+        .await
         .expect("no results from category request");
     let mut set = false;
     if title.is_some() {

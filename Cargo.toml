@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.71"
-async-stripe = { version = "0.37.2", features = ["runtime-tokio-hyper-rustls"] }
 chrono = "0.4.24"
 clap = "4.2.7"
 config = "0.13.3"
@@ -33,4 +32,7 @@ serde = { version = "1.0.160", features = ["derive"] }
 serde_derive = "1.0.160"
 serde_json = "1.0.96"
 simplelog = { version = "0.12.1", features = ["termcolor"] }
+squareup = "2.10.1"
+tokio = { version = "1.39.2", features = [ "macros", "rt-multi-thread" ] }
+tokio-postgres = { version = "0.7.11", features = ["with-chrono-0_4", "with-uuid-1"] }
 uuid = { version = "1.0", features = ["serde"] }

@@ -948,7 +948,7 @@ impl ScaleAPI {
 pub struct Scales {}
 
 impl Scales {
-    pub fn filtered_items(
+    pub async fn filtered_items(
         &mut self,
         api: &mut super::api::ITRApi,
         args: &ArgMatches,
@@ -960,6 +960,7 @@ impl Scales {
 
         let json = api
             .get(&"/api/ProductsData/GetAllProducts".to_string())
+            .await
             .expect("no results from API call");
         let mut items: Vec<super::api::ProductData> = serde_json::from_str(&json)?;
         items = items
@@ -1006,12 +1007,13 @@ impl Scales {
             }
         }
         if plu_assignment.len() > 0 {
-            let r = api.set_plu(plu_assignment);
+            let r = api.set_plu(plu_assignment).await;
             if r.is_err() {
                 return Err(r.err().unwrap());
             }
             let json = api
                 .get(&"/api/ProductsData/GetAllProducts".to_string())
+                .await
                 .expect("no results from API call");
             items = serde_json::from_str(&json)?;
             items = items
@@ -1043,7 +1045,7 @@ impl Scales {
         Ok(items)
     }
 
-    pub fn send(
+    pub async fn send(
         &mut self,
         api: &mut super::api::ITRApi,
         settings: &super::settings::Settings,
@@ -1051,9 +1053,9 @@ impl Scales {
     ) -> Result<()> {
         let progress = args.get_flag("progress");
         let delete_plus = args.get_flag("wipe");
-        let weighed_items = self.filtered_items(api, args)?;
+        let weighed_items = self.filtered_items(api, args).await?;
         let plufile = args.get_one::<String>("output").unwrap();
-        self.build_plu_xlsx(api, &weighed_items, plufile, &args)?;
+        self.build_plu_xlsx(api, &weighed_items, plufile, &args).await?;
         match args.get_one::<String>("scale-file") {
             Some(scalefile) => self.build_scale_xlsx(&weighed_items, scalefile)?,
             _ => (),
@@ -1141,7 +1143,7 @@ impl Scales {
         Ok(())
     }
 
-    pub fn build_plu_xlsx(
+    pub async fn build_plu_xlsx(
         &mut self,
         api: &mut super::api::ITRApi,
         weighed_items: &Vec<ProductData>,
@@ -1155,7 +1157,8 @@ impl Scales {
         let decimal_format = Format::new().set_num_format("0.00");
 
         let sections: HashMap<i32, String> = api
-            .get_sections()?
+            .get_sections()
+            .await?
             .iter()
             .map(|s| (s.id as i32, s.name.to_owned()))
             .collect();

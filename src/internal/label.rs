@@ -42,13 +42,13 @@ impl LabelFile {
 
         let mut row: u32 = 1;
         for item in items {
+            debug!("{:#?}", &item);
             let plu = if item.plu.is_some() {
-                let _p = item.plu.unwrap().parse::<u16>().unwrap();
+                let _p = item.plu.as_ref().unwrap().parse::<u16>().unwrap();
                 _p
             } else {
                 0
             };
-
             row = row + 1;
             println!(
                 "[PLU {}] {} : {} : {}",

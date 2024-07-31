@@ -3,10 +3,11 @@ use chrono::{DateTime, Days, Local, NaiveDateTime, SecondsFormat, Timelike, Utc}
 use home;
 use log::*;
 use reqwest;
-use reqwest::blocking::multipart;
+use reqwest::multipart;
 use reqwest::header::CONTENT_TYPE;
 
 use serde::{Deserialize, Serialize};
+use serde::de::{Deserializer};
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
@@ -149,6 +150,33 @@ pub struct CustomersAnswer {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct ITRTaxId(pub Option<i32>);
+fn deserialize_itrtaxid<'de, D>(deserializer: D) -> Result<ITRTaxId, D::Error>
+where D: Deserializer<'de> {
+    let buf = String::deserialize(deserializer)?;
+    match buf.parse::<i32>() {
+        Err(_) => Ok(ITRTaxId(None)),
+        Ok(v) => Ok(ITRTaxId(Some(v)))
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Tax {
+    #[serde(rename = "Id")]
+    pub id: ITRTaxId,
+    #[serde(rename = "Description")]
+    pub description: String,
+    #[serde(rename = "TaxRate")]
+    pub rate: f64,
+    pub squareup_id: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ITRTaxAnswer {
+    value: Vec<Tax>
+}
+
+#[derive(Deserialize, Debug)]
 pub struct ProductData {
     pub upc: String,
     pub description: String,
@@ -180,6 +208,8 @@ pub struct ProductData {
     pub case_cost: Option<f32>,
     pub pack: Option<i32>,
     pub cost: Option<f32>,
+    #[serde(deserialize_with = "deserialize_itrtaxid", rename="taxes")]
+    pub taxclass: ITRTaxId,
 }
 
 impl ProductData {
@@ -348,7 +378,7 @@ impl ITRApi {
         Ok(())
     }
 
-    pub fn auth(&mut self) -> Result<()> {
+    pub async fn auth(&mut self) -> Result<()> {
         let mut contents = String::new();
         self.backingfile.read_to_string(&mut contents)?;
         self.bearer_token = bearer_token_from_json(contents);
@@ -365,7 +395,7 @@ impl ITRApi {
         self.clear_token()?;
 
         debug!("Fetching token");
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let user = match env::var("ITRETAIL_USERNAME") {
             Ok(p) => p,
             Err(..) => return Err(anyhow!("no username provided")),
@@ -382,10 +412,10 @@ impl ITRApi {
         let res = client
             .post("https://retailnext.itretail.com/token?accesslevel=0&securityCode=undefined")
             .form(&params)
-            .send();
+            .send().await;
         match res {
             Ok(result) => {
-                let text_response = result.text();
+                let text_response = result.text().await;
                 let bt = bearer_token_from_json(text_response.ok().unwrap());
                 self.backingfile.set_len(0)?;
                 self.backingfile.rewind()?;
@@ -404,14 +434,14 @@ impl ITRApi {
         return Ok(());
     }
 
-    pub fn call<T: Serialize + ?Sized>(
+    pub async fn call<T: Serialize + ?Sized>(
         &mut self,
         method: reqwest::Method,
         endpoint: &String,
         headers: Option<reqwest::header::HeaderMap>,
         json: Option<&T>,
     ) -> Result<String> {
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let url = "https://retailnext.itretail.com".to_owned() + endpoint;
         let mut builder = client.request(method, url);
         if let Some(headers) = headers {
@@ -421,11 +451,11 @@ impl ITRApi {
             builder = builder.json(json)
         }
         builder = builder.bearer_auth(self.bearer_token.access_token.to_string());
-        let res = builder.send();
+        let res = builder.send().await;
         match res {
             Ok(result) => {
                 if result.status().is_success() {
-                    let text_response = result.text()?;
+                    let text_response = result.text().await?;
                     Ok(text_response)
                 } else {
                     Err(anyhow!(
@@ -441,14 +471,14 @@ impl ITRApi {
         }
     }
 
-    pub fn call_multi<T: Serialize + ?Sized>(
+    pub async fn call_multi<T: Serialize + ?Sized>(
         &mut self,
         method: reqwest::Method,
         endpoint: &String,
         headers: Option<reqwest::header::HeaderMap>,
         form: multipart::Form,
     ) -> Result<String> {
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let url = "https://retailnext.itretail.com".to_owned() + endpoint;
         let mut builder = client.request(method, url);
         if let Some(headers) = headers {
@@ -456,11 +486,11 @@ impl ITRApi {
         }
         builder = builder.multipart(form);
         builder = builder.bearer_auth(self.bearer_token.access_token.to_string());
-        let res = builder.send();
+        let res = builder.send().await;
         match res {
             Ok(result) => {
                 if result.status().is_success() {
-                    let text_response = result.text()?;
+                    let text_response = result.text().await?;
                     Ok(text_response)
                 } else {
                     Err(anyhow!(
@@ -476,7 +506,7 @@ impl ITRApi {
         }
     }
 
-    pub fn set_plu(&mut self, plus: Vec<PLUAssignment>) -> Result<String> {
+    pub async fn set_plu(&mut self, plus: Vec<PLUAssignment>) -> Result<String> {
         let endpoint = &"/api/ProductsData/UpdateOnly".to_string();
         let mut csvcontents = "UPC,PLU\r\n".to_string();
         csvcontents.push_str(
@@ -485,20 +515,20 @@ impl ITRApi {
                 .map(|ass| format!("{},{}\r\n", ass.upc, ass.plu))
                 .collect::<String>(),
         );
-        let part = reqwest::blocking::multipart::Part::text(csvcontents)
+        let part = reqwest::multipart::Part::text(csvcontents)
             .file_name("plu.csv")
             .mime_str("text/plain")?;
-        let form = reqwest::blocking::multipart::Form::new();
+        let form = reqwest::multipart::Form::new();
         let form = form.part("1", part);
         let form = form
             .text("2", "[\"upc\",\"PLU\"]")
             .text("3", "false")
             .text("5[0]", "198dd573-ca6e-435a-b779-98922ad0185a");
-        let r = self.call_multi::<Empty>(reqwest::Method::POST, endpoint, None, form);
+        let r = self.call_multi::<Empty>(reqwest::Method::POST, endpoint, None, form).await;
         r
     }
 
-    pub fn post_json<T: Serialize + ?Sized>(
+    pub async fn post_json<T: Serialize + ?Sized>(
         &mut self,
         endpoint: &String,
         json: &T,
@@ -508,10 +538,10 @@ impl ITRApi {
             CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
-        self.call(reqwest::Method::POST, endpoint, Some(json_hdrs), Some(json))
+        self.call(reqwest::Method::POST, endpoint, Some(json_hdrs), Some(json)).await
     }
 
-    pub fn put_json<T: Serialize + ?Sized>(
+    pub async fn put_json<T: Serialize + ?Sized>(
         &mut self,
         endpoint: &String,
         json: &T,
@@ -521,24 +551,25 @@ impl ITRApi {
             CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
-        self.call(reqwest::Method::PUT, endpoint, Some(json_hdrs), Some(json))
+        self.call(reqwest::Method::PUT, endpoint, Some(json_hdrs), Some(json)).await
     }
 
-    pub fn get(&mut self, endpoint: &String) -> Result<String> {
-        self.call::<Empty>(reqwest::Method::GET, endpoint, None, None)
+    pub async fn get(&mut self, endpoint: &String) -> Result<String> {
+        self.call::<Empty>(reqwest::Method::GET, endpoint, None, None).await
     }
 
-    pub fn get_customers(&mut self) -> Result<Vec<Customer>> {
+    pub async fn get_customers(&mut self) -> Result<Vec<Customer>> {
         let results = self
             .get(&"/api/CustomersData/Get?$select=%2A".to_string())
+            .await
             .expect("no results from API call");
         let answer: CustomersAnswer = serde_json::from_str(&results)?;
         Ok(answer.value)
     }
 
-    pub fn get_customer(&mut self, cid: &Uuid) -> Result<Option<Customer>> {
+    pub async fn get_customer(&mut self, cid: &Uuid) -> Result<Option<Customer>> {
         let url = format!("/api/CustomersData/GetOne/?Id={}", cid);
-        let results = self.get(&url).expect("no results from API call");
+        let results = self.get(&url).await.expect("no results from API call");
         if results.trim() == "null" {
             return Ok(None);
         }
@@ -554,15 +585,34 @@ impl ITRApi {
         Ok(Some(customer.unwrap()))
     }
 
-    pub fn get_sections(&mut self) -> Result<Vec<Section>> {
+    pub async fn get_sections(&mut self) -> Result<Vec<Section>> {
         let results = self
             .get(&"/api/SectionsData/GetAllSections".to_string())
+            .await
             .expect("no results from API call");
         let sections: Vec<Section> = serde_json::from_str(&results)?;
         Ok(sections)
     }
 
-    pub fn get_categories(&mut self) -> Result<Vec<Category>> {
+    pub async fn get_products(&mut self) -> Result<Vec<ProductData>> {
+        let results = self
+            .get(&"/api/ProductsData/GetAllProducts".to_string())
+            .await
+            .expect("no results from API call");
+        let products: Vec<ProductData> = serde_json::from_str(&results)?;
+        Ok(products)
+    }
+
+    pub async fn get_tax(&mut self) -> Result<Vec<Tax>> {
+        let results = self
+            .get(&"/api/TaxesData/Get?$orderby=Id&$select=Id,Description,Identifier,TaxRate".to_string())
+            .await
+            .expect("no results from API call");
+        let taxanswer: ITRTaxAnswer = serde_json::from_str(&results)?;
+        Ok(taxanswer.value)
+    }
+
+    pub async fn get_categories(&mut self) -> Result<Vec<Category>> {
         let mut hdrs = reqwest::header::HeaderMap::new();
         hdrs.insert(
             reqwest::header::HeaderName::from_static("storeids"),
@@ -575,37 +625,21 @@ impl ITRApi {
                 Some(hdrs),
                 None,
             )
+            .await
             .expect("no results from API call");
         let cats: Vec<Category> = serde_json::from_str(&results)?;
         Ok(cats)
     }
 
-    pub fn make_customer(&mut self, c: &MinimalCustomer) -> Result<String> {
-        self.post_json(&"/api/CustomersData/Post".to_string(), c)
+    pub async fn make_customer(&mut self, c: &MinimalCustomer) -> Result<String> {
+        self.post_json(&"/api/CustomersData/Post".to_string(), c).await
     }
 
-    pub fn update_customer(&mut self, c: &Customer) -> Result<String> {
-        self.put_json(&"/api/CustomersData/Put".to_string(), c)
+    pub async fn update_customer(&mut self, c: &Customer) -> Result<String> {
+        self.put_json(&"/api/CustomersData/Put".to_string(), c).await
     }
 
-    /*
-    pub fn get_transactions(&mut self, ndays: u64) -> Result<Vec<EJTxn>> {
-        let days = Days::new(ndays);
-        let now = Local::now();
-        let then = now.checked_sub_days(days).unwrap();
-        let url = format!("/api/ElectronicJournalData/Get?\
-            $expand=TransactionTenders($select+%3D+TenderCode,LastCardDigits)&\
-            $filter=(TransactionDate+ge+{}+and++TransactionDate+lt+{})+and+(Total+ne+null)&\
-            $orderby=TransactionDate&$select=Id,EmployeeId,TransactionDate,Total,Canceled,CustomerId,CustomerFirstName,CustomerLastName",
-            then.to_rfc3339_opts(SecondsFormat::Secs, true),
-            now.to_rfc3339_opts(SecondsFormat::Secs, true));
-        let r = self.get(&url).expect("Electronic Journal Output");
-        let answer: EJTAnswer = serde_json::from_str(&r)?;
-        Ok(answer.value)
-    }
-    */
-
-    pub fn get_transactions_details(&mut self, start_o: Option<&DateTime<Local>>, end_o: Option<&DateTime<Local>>) -> Result<Vec<EJTxn>> {
+    pub async fn get_transactions_details(&mut self, start_o: Option<&DateTime<Local>>, end_o: Option<&DateTime<Local>>) -> Result<Vec<EJTxn>> {
         let end_default = Local::now();
         let end = end_o.unwrap_or(&end_default);
         let start_default = end.checked_sub_days(Days::new(1)).unwrap();
@@ -618,7 +652,9 @@ impl ITRApi {
             $orderby=TransactionDate&$select=Id,EmployeeId,TransactionDate,Total,Canceled,CustomerId,CustomerFirstName,CustomerLastName",
             start.to_rfc3339_opts(SecondsFormat::Secs, true),
             end.to_rfc3339_opts(SecondsFormat::Secs, true));
-        let r = self.get(&url).expect("Electronic Journal Output");
+        let r = self.get(&url)
+            .await
+            .expect("Electronic Journal Output");
         let answer: EJTAnswer = serde_json::from_str(&r)?;
         Ok(answer.value)
     }

@@ -7,6 +7,6 @@ pub mod sidedb;
 pub mod label;
 pub mod loyalty;
 pub mod settings;
-pub mod stripe;
+pub mod square;
 pub mod tvmenu;
 pub mod tasmota;

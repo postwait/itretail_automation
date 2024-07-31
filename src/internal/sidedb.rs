@@ -1,20 +1,33 @@
 use anyhow::Result;
-use postgres::{Client, NoTls};
+use tokio::task::JoinHandle;
+use tokio_postgres::NoTls;
 use rust_decimal::prelude::*;
 use chrono::{NaiveDate, NaiveDateTime};
 use log::*;
 use uuid::Uuid;
 use std::collections::HashMap;
 
-use super::api::{Customer, ProductData};
+use super::api::{Customer, ProductData, Tax, ITRTaxId};
 
 pub struct SideDb {
-    client: Client,
+    client: tokio_postgres::Client,
+    handle: JoinHandle<()>,
 }
 
-pub fn make_sidedb(settings: &super::settings::Settings) -> Result<SideDb> {
-    let client = Client::connect(&settings.postgres.connect_string, NoTls)?;
-    Ok(SideDb{client: client})
+impl Drop for SideDb {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+pub async fn make_sidedb(settings: super::settings::Settings) -> Result<SideDb> {
+    let (client, connection) = tokio_postgres::connect(&settings.postgres.connect_string, NoTls).await?;
+    let handle = tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            error!("connection error: {}", e);
+        }
+    });
+    Ok(SideDb{client: client, handle: handle})
 }
 
 fn decimal_price(a: &str) -> Decimal {
@@ -25,17 +38,17 @@ fn some_f32_to_some_decimal(a: &Option<f32>) -> Option<Decimal> {
     else { Decimal::from_f32(a.unwrap()) }
 }
 impl SideDb {
-    pub fn store_txns<'a, I>(&mut self, txns: I) -> Result<u32>
+    pub async fn store_txns<'a, I>(&mut self, txns: I) -> Result<u32>
     where
         I: Iterator<Item = &'a super::api::EJTxn>
     {
-        let mut sqltxn = self.client.transaction()?;
+        let sqltxn = self.client.transaction().await?;
         let mut cnt = 0;
         for t in txns {
             let td = NaiveDateTime::parse_from_str(&t.transaction_date, "%Y-%m-%dT%H:%M:%S%.f")?;
             let num_rows = sqltxn.execute("INSERT INTO itrejtxn (transaction_id, customer_id, transaction_date, canceled, total)
             VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
-            &[&t.id, &t.customer_id, &td, &t.canceled, &Decimal::from_f64(t.total)])?;
+            &[&t.id, &t.customer_id, &td, &t.canceled, &Decimal::from_f64(t.total)]).await?;
             if num_rows > 0 {
                 if let Some(products) = t.transaction_products.as_ref() {
                     for p in products {
@@ -47,27 +60,27 @@ impl SideDb {
                             (transaction_subid, transaction_id, product_id, upc, is_voided, is_refunded, price, line_discount, quantity, weight)
                             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING",
                         &[&p.id, &t.id, &p.product_id, &upc, &p.is_voided, &p.is_refunded,
-                          &Decimal::from_f64(p.price), &Decimal::from_f64(p.line_discount), &p.quantity, &p.weight])?;
+                          &Decimal::from_f64(p.price), &Decimal::from_f64(p.line_discount), &p.quantity, &p.weight]).await?;
                     }
                 }
                 cnt += 1;
             }
         }
-        sqltxn.commit()?;
+        sqltxn.commit().await?;
         Ok(cnt)
     }
-    pub fn store_customers<'a, I>(&mut self, customers: I) -> Result<u32>
+    pub async fn store_customers<'a, I>(&mut self, customers: I) -> Result<u32>
     where
         I: Iterator<Item = super::api::Customer>,
     {
-        let existing = { self.get_customers()? };
+        let existing = { self.get_customers().await? };
         let mut to_delete: HashMap<Uuid, &Customer> = HashMap::new();
         for c in existing.iter() {
            to_delete.insert(c.id, &c);
         }
         let total_db_size = to_delete.len() as f64;
 
-        let mut txn = { self.client.transaction()? };
+        let txn = { self.client.transaction().await? };
         let mut cnt = 0;
 
         for c in customers {
@@ -136,10 +149,10 @@ impl SideDb {
                                   &Decimal::from_f64(c.balance.unwrap_or(0.0)), &Decimal::from_f64(c.balance_limit.unwrap_or(0.0)),
                                   &c.loyalty_points.unwrap_or(0), &ed, &(c.instore_charge_enabled.unwrap_or(false)),
                                   &c.address1, &c.address2, &c.city, &c.state, &c.zipcode, &cd, &md, &modified_by,
-                                  &(c.frequent_shopper.unwrap_or(false)),&Decimal::from_f64(c.cash_back.unwrap_or(0.0)),&inc])?;
+                                  &(c.frequent_shopper.unwrap_or(false)),&Decimal::from_f64(c.cash_back.unwrap_or(0.0)),&inc]).await?;
             cnt = cnt + re as u32;
         }
-        txn.commit()?;
+        txn.commit().await?;
         if to_delete.len() as f64 / total_db_size > 0.02 {
             error!("We want to delete {} customers out of {}, that's scary high. You'll need to do that manually.",
                    to_delete.len(), total_db_size);
@@ -148,22 +161,30 @@ impl SideDb {
             info!("Marking {} customers as deleted.", to_delete.len());
             for (id, c) in to_delete {
                 info!("Marking {} ({} {} {} {}) as deleted.", id, c.first_name, c.last_name, c.email.as_ref().unwrap_or(&"n/a".to_string()), c.phone.as_ref().unwrap_or(&"n/a".to_string()));
-                self.delete_customer(&id);
+                let _ = self.delete_customer(&id).await;
             }
         }
         Ok(cnt)
     }
-    pub fn delete_customer(&mut self, id: &Uuid) -> Result<bool> {
-        let rc = self.client.execute("UPDATE customer SET deleted=true WHERE customer_id = $1", &[id])?;
+    pub async fn associate_customer_with_square(&mut self, id: &Uuid, square_id: &String) -> Result<bool> {
+        let txn = self.client.transaction().await?;
+        let rc = txn.execute("UPDATE customer SET square_customer_id=$1 WHERE customer_id = $2", &[square_id, id]).await?;
+        txn.commit().await?;
         Ok(rc > 0)
     }
-    pub fn get_customer_household(&mut self) -> Result<Vec<(Uuid, Uuid)>> {
-        let rows = self.client.query("SELECT main, resident FROM customer_house", &[])?;
+    pub async fn delete_customer(&mut self, id: &Uuid) -> Result<bool> {
+        let txn = self.client.transaction().await?;
+        let rc = txn.execute("UPDATE customer SET deleted=true WHERE customer_id = $1", &[id]).await?;
+        txn.commit().await?;
+        Ok(rc > 0)
+    }
+    pub async fn get_customer_household(&mut self) -> Result<Vec<(Uuid, Uuid)>> {
+        let rows = self.client.query("SELECT main, resident FROM customer_house", &[]).await?;
         let rels = rows.iter().map(|x| { (x.get("main"), x.get("resident")) }).collect();
         Ok(rels)
     }
-    pub fn get_customers(&mut self) -> Result<Vec<Customer>> {
-        let rows = self.client.query("SELECT * FROM customer WHERE NOT deleted", &[])?;
+    pub async fn get_customers(&mut self) -> Result<Vec<Customer>> {
+        let rows = self.client.query("SELECT * FROM customer WHERE NOT deleted", &[]).await?;
         let customers = rows.iter().map(|x| {
             Customer{ id: x.get("customer_id"), card_no: x. get("card_no"),
                       last_name: x.get("last_name"), first_name: x.get("first_name"),
@@ -186,12 +207,12 @@ impl SideDb {
         }).collect();
         Ok(customers)
     }
-    pub fn store_orders<'a, I>(&mut self, orders: I) -> Result<u32>
+    pub async fn store_orders<'a, I>(&mut self, orders: I) -> Result<u32>
     where
         I: Iterator<Item = &'a super::localexpress::Order>,
     {
 
-        let mut txn = self.client.transaction()?;
+        let txn = self.client.transaction().await?;
         let mut cnt = 0;
         for o in orders {
             let cd = o.delivery_time_period.split(" - ").collect::<Vec<&str>>();
@@ -218,64 +239,82 @@ impl SideDb {
                     &[&(o.id as i64), &o.uniqid, &(o.store_id as i64), &o.status,
                       &decimal_price(&o.subtotal), &decimal_price(&o.tips), &decimal_price(&o.total),
                       &o.mode, &o.payment_method, &o.customer_first_name, &o.customer_last_name,
-                      &o.customer_phone_number, &o.customer_email, &o.creation_date, &o.delivery_date, &sd, &ed])?;
+                      &o.customer_phone_number, &o.customer_email, &o.creation_date, &o.delivery_date, &sd, &ed]).await?;
             cnt += re as u32;
         }
-        txn.commit()?;
+        txn.commit().await?;
         Ok(cnt)
     }
 
-    pub fn store_products<'a, I>(&mut self, products: I) -> Result<u32>
+    pub async fn store_taxes_itr<'a, I>(&mut self, taxes: I) -> Result<u32>
+    where
+        I: Iterator<Item = &'a Tax>,
+    {
+        let txn = self.client.transaction().await?;
+        let mut cnt = 0;
+        for t in taxes {
+            txn.execute("INSERT INTO tax (id, description, rate)
+                        VALUES($1,$2,$3) ON CONFLICT (id) DO UPDATE SET description = EXCLUDED.description, rate = EXCLUDED.rate",
+                        &[&t.id.0, &t.description, &Decimal::from_f64(t.rate)
+                        ]).await?;
+            cnt += 1;
+        }
+        txn.commit().await?;
+        Ok(cnt)
+    }
+
+    pub async fn store_products<'a, I>(&mut self, products: I) -> Result<u32>
     where
         I: Iterator<Item = &'a super::api::ProductData>,
     {
-        let mut txn = self.client.transaction()?;
+        let txn = self.client.transaction().await?;
         let mut cnt = 0;
-        txn.execute("WITH D as (DELETE FROM itrproduct RETURNING *) INSERT INTO itrproduct_archive SELECT * FROM D ON CONFLICT DO NOTHING", &[])?;
+        txn.execute("WITH D as (DELETE FROM itrproduct RETURNING *) INSERT INTO itrproduct_archive SELECT * FROM D ON CONFLICT DO NOTHING", &[]).await?;
         for p in products {
             if p.special_price.is_some() && p.start_date.is_some() && p.end_date.is_some() {
                 txn.execute("INSERT INTO itrproduct
                             (upc, description, second_description, normal_price, special_price, special_date,
                              scale, active, deleted, discount, plu, cert_code, vendor_id, department_id, section_id,
-                             wicable, foodstamp, quantity_on_hand, size, case_cost, pack, cost)
-                        VALUES($1,$2,$3,$4,$5,tsrange($6,$7),$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)",
+                             wicable, foodstamp, quantity_on_hand, size, case_cost, pack, cost, taxclass)
+                        VALUES($1,$2,$3,$4,$5,tsrange($6,$7),$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)",
                         &[&p.upc, &p.description, &p.second_description, &Decimal::from_f64(p.normal_price),
                         &Decimal::from_f64(p.special_price.unwrap()),
                         &NaiveDateTime::parse_from_str(p.start_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S")?, &NaiveDateTime::parse_from_str(p.end_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S")?,
                         &p.scale, &p.active, &p.deleted, &(p.discountable != 0), &p.plu, &p.cert_code, &p.vendor_id, &p.department_id, &p.section_id,
-                        &p.wicable, &p.foodstamp, &(p.quantity_on_hand.unwrap_or(0.0) as f64), &p.size, &some_f32_to_some_decimal(&p.case_cost), &p.pack, &some_f32_to_some_decimal(&p.cost)
-                        ])?;
+                        &p.wicable, &p.foodstamp, &(p.quantity_on_hand.unwrap_or(0.0) as f64), &p.size, &some_f32_to_some_decimal(&p.case_cost), &p.pack, &some_f32_to_some_decimal(&p.cost),
+                        &p.taxclass.0
+                        ]).await?;
 
             }
             else {
                 txn.execute("INSERT INTO itrproduct
                             (upc, description, second_description, normal_price,
                              scale, active, deleted, discount, plu, cert_code, vendor_id, department_id, section_id,
-                             wicable, foodstamp, quantity_on_hand, size, case_cost, pack, cost)
-                        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
+                             wicable, foodstamp, quantity_on_hand, size, case_cost, pack, cost, taxclass)
+                        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
                         &[&p.upc, &p.description, &p.second_description, &Decimal::from_f64(p.normal_price),
                         &p.scale, &p.active, &p.deleted, &(p.discountable != 0), &p.plu, &p.cert_code, &p.vendor_id, &p.department_id, &p.section_id,
                         &p.wicable, &p.foodstamp, &(p.quantity_on_hand.unwrap_or(0.0) as f64), &p.size,
-                        &some_f32_to_some_decimal(&p.case_cost), &p.pack, &some_f32_to_some_decimal(&p.cost)
-                        ])?;
+                        &some_f32_to_some_decimal(&p.case_cost), &p.pack, &some_f32_to_some_decimal(&p.cost), &p.taxclass.0
+                        ]).await?;
             }
             cnt += 1;
         }
-        txn.commit()?;
+        txn.commit().await?;
         Ok(cnt)
     }
-    pub fn get_products(&mut self, date: Option<&NaiveDate>) -> Result<Vec<ProductData>> {
+    pub async fn get_products(&mut self, date: Option<&NaiveDate>) -> Result<Vec<ProductData>> {
         let rows = if date.is_some() {
             let dr = date.unwrap();
             self.client.query("SELECT *, lower(special_date) as start_date, upper(special_date) as end_date
                 FROM itrproduct_archive
                 WHERE NOT deleted and date(timezone('US/Eastern',recorded_at)) = $1
-                ORDER BY department_id, section_id", &[dr])
+                ORDER BY department_id, section_id", &[dr]).await
         } else {
             self.client.query("SELECT *, lower(special_date) as start_date, upper(special_date) as end_date
                 FROM itrproduct
                 WHERE NOT deleted
-                ORDER BY department_id, section_id", &[])
+                ORDER BY department_id, section_id", &[]).await
         }?;
         let products = rows.iter().map(|x| {
             ProductData { upc: x.get("upc"), description: x.get("description"),
@@ -289,12 +328,13 @@ impl SideDb {
                 department_id: x.get("department_id"), section_id: x.get("section_id"), wicable: x.get("wicable"),
                 foodstamp: x.get("foodstamp"), quantity_on_hand: x.get::<&str,Option<f64>>("quantity_on_hand").and_then(|x| Some(x as f32)), size: x.get("size"),
                 case_cost: x.get::<&str,Option<Decimal>>("case_cost").and_then(|x| x.to_f32()), pack: x.get("pack"),
-                cost: x.get::<&str,Option<Decimal>>("cost").and_then(|x| x.to_f32()) }
+                cost: x.get::<&str,Option<Decimal>>("cost").and_then(|x| x.to_f32()),
+                taxclass: ITRTaxId(x.get("taxclass")) }
         }).collect();
         Ok(products)
     }
 
-    pub fn get_spend(&mut self, days: u32) -> Result<Vec<(Uuid, Decimal)>> {
+    pub async fn get_spend(&mut self, days: u32) -> Result<Vec<(Uuid, Decimal)>> {
         /* This query pull total spend for customers (by customer id) from itretail and
            joins that with the total spend from localexpress with a hopeful conversion of localexpress
            email address to (preferrably undeleted) itretail customer id. */
@@ -319,7 +359,7 @@ union
  where status in ('picked_up','delivered') and delivery_date > current_timestamp - ($1::integer * INTERVAL '1 days')
 group by customer_id))
 group by customer_id",
-                                &[&(days as i32)])?;
+                                &[&(days as i32)]).await?;
         let vec = rows.iter().map(|x| (x.get(0), x.get::<usize,Decimal>(1))).collect();
         Ok(vec)
     }

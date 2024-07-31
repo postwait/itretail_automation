@@ -322,13 +322,13 @@ impl MCApi {
     }
 }
 
-pub fn mailchimp_sync(
+pub async fn mailchimp_sync(
     api: &mut super::api::ITRApi,
     settings: &super::settings::Settings,
     args: &ArgMatches,
 ) -> Result<()> {
     let mut itr_customers = HashMap::new();
-    let itc_vec: Vec<super::api::Customer> = api.get_customers()?;
+    let itc_vec: Vec<super::api::Customer> = api.get_customers().await?;
     let just_one = args.get_one::<String>("email");
     for customer in itc_vec {
         if customer.deleted {
@@ -412,7 +412,7 @@ pub fn mailchimp_sync(
             ),
             frequent_shopper: true,
         };
-        match api.make_customer(&min_itr) {
+        match api.make_customer(&min_itr).await {
             Ok(_) => {
                 debug!("Added {} to IT Retail.", nc.email_address);
                 added_to_itr = added_to_itr + 1;
@@ -531,7 +531,7 @@ pub fn mailchimp_sync(
                 if mc_phone.len() > 0
                     && (itr_c.phone.is_none() || itr_c.phone.as_ref().unwrap().len() == 0)
                 {
-                    let newc_r = api.get_customer(&itr_c.id);
+                    let newc_r = api.get_customer(&itr_c.id).await;
                     if newc_r.is_err() {
                         error!(
                             "Failure to pull customer {}: {}",
@@ -546,7 +546,7 @@ pub fn mailchimp_sync(
                     }
                     let mut newc = newc_r.unwrap().unwrap();
                     newc.phone = Some(normalize_phone(&mc_phone));
-                    let r = api.update_customer(&newc);
+                    let r = api.update_customer(&newc).await;
                     if r.is_err() {
                         warn!(
                             "Failure to update {} in IT Retail: {}",

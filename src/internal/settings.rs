@@ -37,21 +37,12 @@ pub enum SquareEnvironment {
     Production,
     Sandbox,
 }
-/*
-impl From<SquareEnvironment> for config::ValueKind {
-    fn from(item: SquareEnvironment) -> Self {
-        match item {
-            SquareEnvironment::Production => config::ValueKind::String(String::from("production")),
-            SquareEnvironment::Sandbox => config::ValueKind::String(String::from("sandbox"))
-        }
-    }
-}
-    */
+
 impl Into<config::ValueKind> for SquareEnvironment {
     fn into(self) -> config::ValueKind {
         match self {
-            SquareEnvironment::Production => config::ValueKind::String(String::from("production")),
-            SquareEnvironment::Sandbox => config::ValueKind::String(String::from("sandbox"))
+            SquareEnvironment::Production => config::ValueKind::String(String::from("Production")),
+            SquareEnvironment::Sandbox => config::ValueKind::String(String::from("Sandbox"))
         }
     }
 }
@@ -60,9 +51,14 @@ impl Into<config::ValueKind> for SquareEnvironment {
 #[allow(unused)]
 pub struct Square {
     pub environment: SquareEnvironment,
+    pub sandbox_appid: String,
     pub sandbox_secret: String,
+    pub production_appid: String,
     pub production_secret: String,
+    pub location: String,
     pub max_retries: u32,
+    pub weight_unit: String,
+    pub weight_precision: i32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -118,9 +114,15 @@ impl Settings {
             .set_default("mailchimp.dc", "us21")?
             .set_default("scales.addresses", Vec::<String>::with_capacity(0))?
             .set_default("scales.timeout_seconds", 300)?
-            .set_default("square.environment", SquareEnvironment::Sandbox)?
+            .set_default("square.environment", "Production")?
+            .set_default("square.sandbox_appid", "")?
             .set_default("square.sandbox_secret", "")?
+            .set_default("square.production_appid", "")?
             .set_default("square.production_secret", "")?
+            .set_default("square.location", "")?
+            .set_default("square.weight_unit", "IMPERIAL_POUND")?
+            .set_default("square.weight_precision", 3)?
+            .set_default("square.location", "")?
             .set_default("square.max_retries", 3)?
             .set_default("tasmota.light1", "192.168.202.7")?
             .set_default("tasmota.light2", "192.168.202.151")?

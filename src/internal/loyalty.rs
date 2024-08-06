@@ -6,6 +6,10 @@ use log::*;
 use rust_decimal::prelude::*;
 use uuid::Uuid;
 
+pub fn valid_loyalty_levels() -> Vec<u32> {
+    vec![3,4,5,6,7,8,9,10]
+}
+
 pub fn spend_180_to_discount(spend: f64) -> u8 {
     match spend {
         /*

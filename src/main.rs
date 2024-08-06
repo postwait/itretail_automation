@@ -110,6 +110,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                          .long("products-square")
                          .action(ArgAction::SetTrue)
                          .num_args(0))
+                .arg(Arg::new("inventory-square")
+                         .long("inventory-square")
+                         .action(ArgAction::SetTrue)
+                         .num_args(0))
                 .arg(Arg::new("orders")
                          .long("orders")
                          .action(ArgAction::SetTrue)
@@ -594,13 +598,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 panic!("{}", lehandle.err().unwrap())
             }
             let mut leapi = lehandle.ok().unwrap();
-            match leapi.auth()  {
+            match leapi.auth().await  {
                 Err(err) => {
                     error!("Error authenticating with LocalExpress: {}", err);
                 },
                 _ => {}
             }
-            let r = leapi.get_current_orders();
+            let r = leapi.get_current_orders().await;
             if r.is_ok() {
                 let orders = r.unwrap();
                 let new_order_cnt = orders.iter().fold(0, |a,x| { if x.status == "new" { a + 1 } else { a + 0 } });
@@ -618,12 +622,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!("New Orders: {}", new_order_cnt);
                 info!("Today's Unfinished Orders: {}", todays_unfinished_cnt);
                 let mut light1 = internal::tasmota::new_light(settings.tasmota.light1);
-                match light1.power(todays_unfinished_cnt > 0) {
+                match light1.power(todays_unfinished_cnt > 0).await {
                     Err(e) => error!("Error actuating light1: {}", e.to_string()),
                     Ok(_) => {}
                 }
                 let mut light2 = internal::tasmota::new_light(settings.tasmota.light2);
-                match light2.power(new_order_cnt > 0) {
+                match light2.power(new_order_cnt > 0).await {
                     Err(e) => error!("Error actuating light2: {}", e.to_string()),
                     Ok(_) => {}
                 }
@@ -637,6 +641,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let period = *scmd.get_one::<u32>("period").unwrap();
             let do_products = scmd.get_flag("products");
             let do_square_products = scmd.get_flag("products-square");
+            let do_square_inventory = scmd.get_flag("inventory-square");
             let do_customers = scmd.get_flag("customers");
             let do_square_customers = scmd.get_flag("customers-square");
             let full_customer = scmd.get_flag("customers-full");
@@ -676,11 +681,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                if do_square_customers || do_all {
+                if do_square_customers /* || do_all */ {
                     info!("Starting square customer sync.");
                     let r = internal::square::square_connect_create(&settings);
                     match r.sync_customers_with_sidedb(&mut sidedb).await {
-                        Ok(v) => info!("Synced up {}, upddated {}", v.added_up, v.updated_up),
+                        Ok(v) => info!("{:?}", v),
                         Err(e) => error!("Square customer sync error: {}", e)
                     }
                 }
@@ -719,11 +724,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     progress = true;
                 }
 
-                if do_square_products || do_all {
+                if do_square_products || do_square_inventory /* || do_all */ {
                     info!("Starting square product sync.");
                     let r = internal::square::square_connect_create(&settings);
-                    match r.sync_products_with_sidedb(&mut sidedb).await {
-                        Ok(v) => info!("Synced up {}, upddated {}", v.added_up, v.updated_up),
+                    match r.sync_products_with_sidedb(&mut sidedb, do_square_inventory || do_all).await {
+                        Ok(v) => info!("{:?}", v),
                         Err(e) => error!("Square customer sync error: {}", e)
                     }
                 }
@@ -773,14 +778,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             panic!("{}", lehandle.err().unwrap())
                         }
                         let mut leapi = lehandle.ok().unwrap();
-                        match leapi.auth()  {
+                        match leapi.auth().await  {
                             Err(err) => {
                                 error!("Error authenticating with LocalExpress: {}", err);
                                 std::process::exit(exitcode::SOFTWARE);
                             },
                             _ => {}
                         }
-                        let r = leapi.get_orders();
+                        let r = leapi.get_orders().await;
                         if r.is_err() {
                             if !auth_error && r.as_ref().err().unwrap().to_string().eq("Unauthorized") {
                                 warn!("Reauthorizing LocalExpress: {}", r.as_ref().err().unwrap());

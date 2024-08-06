@@ -4,8 +4,7 @@ use chrono::{NaiveDate, NaiveDateTime, Local, Days, Months};
 use home;
 use log::*;
 use reqwest;
-use reqwest::blocking::Client;
-// use reqwest::blocking::multipart;
+use reqwest::Client;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::cookie::Jar;
 
@@ -202,7 +201,7 @@ impl LEApi {
     }
 
     fn client(&mut self, use_cookies: bool) -> Client {
-        let mut builder = reqwest::blocking::Client::builder()
+        let mut builder = Client::builder()
             .redirect(reqwest::redirect::Policy::none());
         if use_cookies {
             builder = builder
@@ -223,7 +222,7 @@ impl LEApi {
         Err(anyhow!("no CSRF in form"))
     }
 
-    pub fn auth(&mut self) -> Result<()> {
+    pub async fn auth(&mut self) -> Result<()> {
         let mut contents = String::new();
         self.backingfile.read_to_string(&mut contents)?;
         self.bearer_token = bearer_token_from_json(contents);
@@ -250,10 +249,10 @@ impl LEApi {
 
         debug!("Fetching token");
         let client = self.client(true);
-        let res = client.get("https://partner.localexpress.io/auth/default/login").send();
+        let res = client.get("https://partner.localexpress.io/auth/default/login").send().await;
         let tok = match res {
             Ok(result) => {
-                let text = result.text()?;
+                let text = result.text().await?;
                 self.get_csrf_from_form(&text)
             },
             _ => { Err(anyhow!("Failed to start login sequence")) }
@@ -267,7 +266,7 @@ impl LEApi {
             .post("https://partner.localexpress.io/auth/default/login")
             .form(&params);
         let req = reqb.build().ok().unwrap();
-        let res = client.execute(req);
+        let res = client.execute(req).await;
         match res {
             Ok(result) => {
                 let mut bt = BearerToken::default();
@@ -300,7 +299,7 @@ impl LEApi {
         return Ok(());
     }
 
-    pub fn call<T: Serialize + ?Sized>(
+    pub async fn call<T: Serialize + ?Sized>(
         &mut self,
         method: reqwest::Method,
         endpoint: &String,
@@ -317,11 +316,11 @@ impl LEApi {
             builder = builder.json(json)
         }
         builder = builder.bearer_auth(self.bearer_token.access_token.to_string());
-        let res = builder.send();
+        let res = builder.send().await;
         match res {
             Ok(result) => {
                 if result.status().is_success() {
-                    let text_response = result.text()?;
+                    let text_response = result.text().await?;
                     Ok(text_response)
                 } else {
                     Err(anyhow!(
@@ -374,7 +373,7 @@ impl LEApi {
     }
     */
 
-    pub fn post_json<T: Serialize + ?Sized>(
+    pub async fn post_json<T: Serialize + ?Sized>(
         &mut self,
         endpoint: &String,
         json: &T,
@@ -384,41 +383,23 @@ impl LEApi {
             CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
-        self.call(reqwest::Method::POST, endpoint, Some(json_hdrs), Some(json))
-    }
-    /*
-    pub fn put_json<T: Serialize + ?Sized>(
-        &mut self,
-        endpoint: &String,
-        json: &T,
-    ) -> Result<String> {
-        let mut json_hdrs = reqwest::header::HeaderMap::new();
-        json_hdrs.insert(
-            CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
-        self.call(reqwest::Method::PUT, endpoint, Some(json_hdrs), Some(json))
+        self.call(reqwest::Method::POST, endpoint, Some(json_hdrs), Some(json)).await
     }
 
-    pub fn get(&mut self, endpoint: &String) -> Result<String> {
-        self.call::<Empty>(reqwest::Method::GET, endpoint, None, None)
-    }
-    */
-
-    pub fn get_orders(&mut self) -> Result<Vec<Order>> {
+    pub async fn get_orders(&mut self) -> Result<Vec<Order>> {
         let endpoint = "/rest/v2/store/all/order?expand=productsCount,driverName&perPage=50&page=0".to_string();
         let filter = json!({});//"filter":{"status":["new","confirmed","assembling","assembled","packing","packed"]},"filterType":"basic"});
-        let r = self.post_json(&endpoint, &filter)?;
+        let r = self.post_json(&endpoint, &filter).await?;
         let response: OrdersResponse = serde_json::from_str(&r)?;
         Ok(response.data.result)
     }
 
-    pub fn get_current_orders(&mut self) -> Result<Vec<Order>> {
+    pub async fn get_current_orders(&mut self) -> Result<Vec<Order>> {
         let yesterday = Local::now().date_naive().checked_sub_days(Days::new(1)).unwrap();
         let future = yesterday.checked_add_months(Months::new(3)).unwrap();
         let endpoint = "/rest/v2/store/all/order?expand=productsCount,driverName&perPage=50&page=0".to_string();
         let filter = json!({"filter":{"creation_date":[yesterday.format("%Y-%m-%d").to_string(),future.format("%Y-%m-%d").to_string()]},"filterType":"basic"});
-        let r = self.post_json(&endpoint, &filter)?;
+        let r = self.post_json(&endpoint, &filter).await?;
         let response: OrdersResponse = serde_json::from_str(&r)?;
         Ok(response.data.result)
     }

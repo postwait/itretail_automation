@@ -128,8 +128,8 @@ pub fn mailchimp_api_new(settings: &super::settings::Settings, token: Option<&St
 }
 
 impl MCApi {
-    pub fn get_list(&mut self, listid: Option<&String>) -> Result<MCList> {
-        let lists_get = self.get("lists");
+    pub async fn get_list(&mut self, listid: Option<&String>) -> Result<MCList> {
+        let lists_get = self.get("lists").await;
         if lists_get.is_err() {
             return Err(anyhow!(
                 "Failed to get mailchip lists {}",
@@ -166,7 +166,7 @@ impl MCApi {
         }
     }
 
-    pub fn get_subscriber(&mut self, listid: &String, email: &String) -> Result<HashMap<String, Member>> {
+    pub async fn get_subscriber(&mut self, listid: &String, email: &String) -> Result<HashMap<String, Member>> {
         let mut set = HashMap::new();
         let batch_size = 500;
         let mut start = 0;
@@ -176,7 +176,7 @@ impl MCApi {
                 "lists/{}/members?count={}&offset={}",
                 listid, batch_size, start
             );
-            let subs = serde_json::from_str::<Members>(&self.get(&url)?)?
+            let subs = serde_json::from_str::<Members>(&self.get(&url).await?)?
                 .members
                 .into_iter();
             let mut count = 0;
@@ -197,7 +197,7 @@ impl MCApi {
         Ok(set)
     }
 
-    pub fn get_subscribers(&mut self, listid: &String) -> Result<HashMap<String, Member>> {
+    pub async fn get_subscribers(&mut self, listid: &String) -> Result<HashMap<String, Member>> {
         let mut set = HashMap::new();
         let batch_size = 500;
         let mut start = 0;
@@ -206,7 +206,7 @@ impl MCApi {
                 "lists/{}/members?count={}&offset={}",
                 listid, batch_size, start
             );
-            let subs = serde_json::from_str::<Members>(&self.get(&url)?)?
+            let subs = serde_json::from_str::<Members>(&self.get(&url).await?)?
                 .members
                 .into_iter();
             let mut count = 0;
@@ -222,13 +222,13 @@ impl MCApi {
         Ok(set)
     }
 
-    pub fn get(&mut self, url: &str) -> Result<String> {
-        let client = reqwest::blocking::Client::new();
+    pub async fn get(&mut self, url: &str) -> Result<String> {
+        let client = reqwest::Client::new();
         let result = client
             .get(format!("https://{}.api.mailchimp.com/3.0/{}", self.dc, url))
             .basic_auth("anything", Some(&self.api_token))
-            .send()?;
-        let text_response = result.text()?;
+            .send().await?;
+        let text_response = result.text().await?;
         Ok(text_response)
     }
 
@@ -237,8 +237,8 @@ impl MCApi {
         method: Method,
         url: &str,
         json: &T,
-    ) -> reqwest::blocking::RequestBuilder {
-        let client = reqwest::blocking::Client::new();
+    ) -> reqwest::RequestBuilder {
+        let client = reqwest::Client::new();
         let url = format!("https://{}.api.mailchimp.com/3.0/{}", self.dc, url);
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -252,18 +252,18 @@ impl MCApi {
             .json(json);
         builder
     }
-    pub fn do_json<T: Serialize + ?Sized>(
+    pub async fn do_json<T: Serialize + ?Sized>(
         &mut self,
         method: Method,
         url: &str,
         json: &T,
     ) -> Result<String> {
         let builder = self.build_req(method, url, json);
-        let res = builder.send();
+        let res = builder.send().await;
         match res {
             Ok(result) => {
                 if result.status().is_success() {
-                    let text_response = result.text()?;
+                    let text_response = result.text().await?;
                     Ok(text_response)
                 } else {
                     Err(anyhow!(
@@ -278,11 +278,11 @@ impl MCApi {
             Err(e) => Err(anyhow!("{}", e.to_string())),
         }
     }
-    pub fn post_json<T: Serialize + ?Sized>(&mut self, url: &str, json: &T) -> Result<String> {
-        self.do_json(Method::POST, url, json)
+    pub async fn post_json<T: Serialize + ?Sized>(&mut self, url: &str, json: &T) -> Result<String> {
+        self.do_json(Method::POST, url, json).await
     }
 
-    pub fn update_member(
+    pub async fn update_member(
         &mut self,
         list_id: &String,
         member: &Member,
@@ -318,7 +318,7 @@ impl MCApi {
             status: Some(member.status.to_string()),
         };
         let url = format!("/lists/{}/members/{}", list_id, member.id);
-        self.do_json(Method::PATCH, &url, &um)
+        self.do_json(Method::PATCH, &url, &um).await
     }
 }
 
@@ -336,7 +336,7 @@ pub async fn mailchimp_sync(
         }
         if customer.email.is_some() {
             let email = customer.email.as_ref().unwrap().to_lowercase();
-            if just_one.is_none() || email.eq_ignore_ascii_case(just_one.unwrap()) {
+            if email != "" && (just_one.is_none() || email.eq_ignore_ascii_case(just_one.unwrap())) {
                 if itr_customers.contains_key(&email) {
                     warn!("IT Retail duplicate: {}", email);
                 }
@@ -357,10 +357,10 @@ pub async fn mailchimp_sync(
         }
     };
     let mut mc_api = mailchimp_api_new(&settings, mc_token);
-    let list = mc_api.get_list(args.get_one::<String>("listid"))?;
+    let list = mc_api.get_list(args.get_one::<String>("listid")).await?;
     let subscribers: HashMap<String, Member> = match just_one {
-        Some(email) => mc_api.get_subscriber(&list.id, email)?,
-        _ => mc_api.get_subscribers(&list.id)?
+        Some(email) => mc_api.get_subscriber(&list.id, email).await?,
+        _ => mc_api.get_subscribers(&list.id).await?
     };
 
     debug!("Pulled {} mailchimp subscribers.", subscribers.len());
@@ -443,7 +443,7 @@ pub async fn mailchimp_sync(
             &c_phone,
             &c.discount.unwrap_or(0),
         );
-        match mc_api.post_json(&format!("/lists/{}/members", &list.id), &new_member) {
+        match mc_api.post_json(&format!("/lists/{}/members", &list.id), &new_member).await {
             Ok(_) => {
                 debug!("Added {} to Mailchimp.", new_member.email_address);
                 added_to_mc = added_to_mc + 1;
@@ -515,7 +515,7 @@ pub async fn mailchimp_sync(
             }
             if differ {
                 trace!("{} records differ ({:?} : {:?}).", mc_key, mc_c, itr_c);
-                let r = mc_api.update_member(&list.id, &mc_c, itr_c);
+                let r = mc_api.update_member(&list.id, &mc_c, itr_c).await;
                 if r.is_err() {
                     warn!(
                         "Failure to update {} in mailchimp: {}",

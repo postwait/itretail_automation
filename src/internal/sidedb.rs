@@ -166,9 +166,9 @@ impl SideDb {
         }
         Ok(cnt)
     }
-    pub async fn associate_customer_with_square(&mut self, id: &Uuid, square_id: &String) -> Result<bool> {
+    pub async fn associate_customer_with_square(&mut self, id: &Uuid, squareup_id: &String) -> Result<bool> {
         let txn = self.client.transaction().await?;
-        let rc = txn.execute("UPDATE customer SET square_customer_id=$1 WHERE customer_id = $2", &[square_id, id]).await?;
+        let rc = txn.execute("UPDATE customer SET squareup_id=$1 WHERE customer_id = $2", &[squareup_id, id]).await?;
         txn.commit().await?;
         Ok(rc > 0)
     }
@@ -184,7 +184,18 @@ impl SideDb {
         Ok(rels)
     }
     pub async fn get_customers(&mut self) -> Result<Vec<Customer>> {
-        let rows = self.client.query("SELECT * FROM customer WHERE NOT deleted", &[]).await?;
+        self.get_customers_ex(false).await
+    }
+    pub async fn get_customers_all(&mut self) -> Result<Vec<Customer>> {
+        self.get_customers_ex(true).await
+    }
+    pub async fn get_customers_ex(&mut self, deleted: bool) -> Result<Vec<Customer>> {
+        let sql = if deleted {
+            "SELECT * FROM customer"
+        } else {
+            "SELECT * FROM customer WHERE NOT deleted"
+        };
+        let rows = self.client.query(sql, &[]).await?;
         let customers = rows.iter().map(|x| {
             Customer{ id: x.get("customer_id"), card_no: x. get("card_no"),
                       last_name: x.get("last_name"), first_name: x.get("first_name"),
@@ -203,6 +214,7 @@ impl SideDb {
                       frequent_shopper: x.get("frequent_shopper"),
                       cash_back: x.get::<&str,Option<Decimal>>("cash_back").and_then(|x| x.to_f64()),
                       inc: x.get::<&str,Option<i64>>("inc").and_then(|x| Some(x as u32)),
+                      squareup_id: x.get("squareup_id"),
             }
         }).collect();
         Ok(customers)
@@ -263,20 +275,35 @@ impl SideDb {
         Ok(cnt)
     }
 
+    pub async fn associate_product_with_square(&mut self, upc: &String, squareup_id: &String) -> Result<bool> {
+        let txn = self.client.transaction().await?;
+        let rc = txn.execute("UPDATE itrproduct SET squareup_id=$1 WHERE upc = $2", &[squareup_id, upc]).await?;
+        txn.commit().await?;
+        Ok(rc > 0)
+    }
+
     pub async fn store_products<'a, I>(&mut self, products: I) -> Result<u32>
     where
         I: Iterator<Item = &'a super::api::ProductData>,
     {
         let txn = self.client.transaction().await?;
         let mut cnt = 0;
-        txn.execute("WITH D as (DELETE FROM itrproduct RETURNING *) INSERT INTO itrproduct_archive SELECT * FROM D ON CONFLICT DO NOTHING", &[]).await?;
+        txn.execute("INSERT INTO itrproduct_archive SELECT * FROM itrproduct ON CONFLICT DO NOTHING", &[]).await?;
         for p in products {
             if p.special_price.is_some() && p.start_date.is_some() && p.end_date.is_some() {
                 txn.execute("INSERT INTO itrproduct
                             (upc, description, second_description, normal_price, special_price, special_date,
                              scale, active, deleted, discount, plu, cert_code, vendor_id, department_id, section_id,
                              wicable, foodstamp, quantity_on_hand, size, case_cost, pack, cost, taxclass)
-                        VALUES($1,$2,$3,$4,$5,tsrange($6,$7),$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)",
+                        VALUES($1,$2,$3,$4,$5,tsrange($6,$7),$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+                        ON CONFLICT (upc) DO UPDATE SET
+                        upc=EXCLUDED.upc, description=EXCLUDED.description, second_description=EXCLUDED.second_description,
+                        normal_price=EXCLUDED.normal_price, special_price=EXCLUDED.special_price, special_date=EXCLUDED.special_date,
+                        scale=EXCLUDED.scale, active=EXCLUDED.active, deleted=EXCLUDED.deleted, discount=EXCLUDED.discount,
+                        plu=EXCLUDED.plu, cert_code=EXCLUDED.cert_code, vendor_id=EXCLUDED.vendor_id, department_id=EXCLUDED.department_id,
+                        section_id=EXCLUDED.section_id, wicable=EXCLUDED.wicable, foodstamp=EXCLUDED.foodstamp,
+                        quantity_on_hand=EXCLUDED.quantity_on_hand, size=EXCLUDED.size, case_cost=EXCLUDED.case_cost,
+                        pack=EXCLUDED.pack, cost=EXCLUDED.cost, taxclass=EXCLUDED.taxclass",
                         &[&p.upc, &p.description, &p.second_description, &Decimal::from_f64(p.normal_price),
                         &Decimal::from_f64(p.special_price.unwrap()),
                         &NaiveDateTime::parse_from_str(p.start_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S")?, &NaiveDateTime::parse_from_str(p.end_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S")?,
@@ -291,7 +318,15 @@ impl SideDb {
                             (upc, description, second_description, normal_price,
                              scale, active, deleted, discount, plu, cert_code, vendor_id, department_id, section_id,
                              wicable, foodstamp, quantity_on_hand, size, case_cost, pack, cost, taxclass)
-                        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
+                        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+                        ON CONFLICT (upc) DO UPDATE SET
+                        upc=EXCLUDED.upc, description=EXCLUDED.description, second_description=EXCLUDED.second_description,
+                        normal_price=EXCLUDED.normal_price, special_price=EXCLUDED.special_price, special_date=EXCLUDED.special_date,
+                        scale=EXCLUDED.scale, active=EXCLUDED.active, deleted=EXCLUDED.deleted, discount=EXCLUDED.discount,
+                        plu=EXCLUDED.plu, cert_code=EXCLUDED.cert_code, vendor_id=EXCLUDED.vendor_id, department_id=EXCLUDED.department_id,
+                        section_id=EXCLUDED.section_id, wicable=EXCLUDED.wicable, foodstamp=EXCLUDED.foodstamp,
+                        quantity_on_hand=EXCLUDED.quantity_on_hand, size=EXCLUDED.size, case_cost=EXCLUDED.case_cost,
+                        pack=EXCLUDED.pack, cost=EXCLUDED.cost, taxclass=EXCLUDED.taxclass",
                         &[&p.upc, &p.description, &p.second_description, &Decimal::from_f64(p.normal_price),
                         &p.scale, &p.active, &p.deleted, &(p.discountable != 0), &p.plu, &p.cert_code, &p.vendor_id, &p.department_id, &p.section_id,
                         &p.wicable, &p.foodstamp, &(p.quantity_on_hand.unwrap_or(0.0) as f64), &p.size,
@@ -329,7 +364,8 @@ impl SideDb {
                 foodstamp: x.get("foodstamp"), quantity_on_hand: x.get::<&str,Option<f64>>("quantity_on_hand").and_then(|x| Some(x as f32)), size: x.get("size"),
                 case_cost: x.get::<&str,Option<Decimal>>("case_cost").and_then(|x| x.to_f32()), pack: x.get("pack"),
                 cost: x.get::<&str,Option<Decimal>>("cost").and_then(|x| x.to_f32()),
-                taxclass: ITRTaxId(x.get("taxclass")) }
+                taxclass: ITRTaxId(x.get("taxclass")), squareup_id: x.get("squareup_id"),
+             }
         }).collect();
         Ok(products)
     }

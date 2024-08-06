@@ -7,7 +7,7 @@ use reqwest::multipart;
 use reqwest::header::CONTENT_TYPE;
 
 use serde::{Deserialize, Serialize};
-use serde::de::{Deserializer};
+use serde::de::Deserializer;
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
@@ -143,6 +143,8 @@ pub struct Customer {
     pub cash_back: Option<f64>,
     #[serde(rename = "Inc")] // WTF is this?
     pub inc: Option<u32>,
+    #[serde(skip)]
+    pub squareup_id: Option<String>,
 }
 #[derive(Deserialize, Debug)]
 pub struct CustomersAnswer {
@@ -168,6 +170,7 @@ pub struct Tax {
     pub description: String,
     #[serde(rename = "TaxRate")]
     pub rate: f64,
+    #[allow(dead_code)]
     pub squareup_id: Option<String>,
 }
 
@@ -210,9 +213,45 @@ pub struct ProductData {
     pub cost: Option<f32>,
     #[serde(deserialize_with = "deserialize_itrtaxid", rename="taxes")]
     pub taxclass: ITRTaxId,
+    #[serde(skip)]
+    pub squareup_id: Option<String>,
+}
+pub fn itr_upc_to_upca(upc: &String) -> Option<String> {
+    if &upc[0..2] != "00" { return None; }
+    let a = &upc.chars().collect::<Vec<char>>()[2..];
+    let d: Vec<Option<u32>> = a.iter().map(|x| { x.to_digit(10) }).collect();
+    if d.iter().any(|x| x.is_none()) {
+        None
+    } else {
+        if d.len() != 11 {
+            None
+        }
+        else if d[0] == Some(2) {
+            if &upc[8..] != "00000"  {
+                None
+            } else {
+                Some(upc[3..8].to_owned())
+            }
+        }
+        else {
+            let mut check_digit: u32 = 0;
+            for i in 0..11 {
+                let multiplier = if (i%2) == 0 { 3 } else { 1 };
+                check_digit += d[i].unwrap() * multiplier;
+            }
+            check_digit %= 10;
+            check_digit = if check_digit > 0 { 10 - check_digit } else { check_digit };
+            // feature gated.
+            //let new_upca = std::iter::chain(a, vec![&(((check_digit % 10) as u8) as char)]);
+            Some(format!("{}{}", a.into_iter().collect::<String>(), ((check_digit % 10 + 48) as u8) as char))
+        }
+    }
 }
 
 impl ProductData {
+    pub fn upca(&self) -> Option<String> {
+        itr_upc_to_upca(&self.upc)
+    }
     pub fn get_price_as_of(&self, whence: DateTime<Local>) -> f64 {
         // IT Retail is a distater.  It can't get timestamps on sales start/end right.
         // The DB/API has hours set, but the UI doesn't allow specifying them and they seem somewhat randomly assigned.
@@ -221,22 +260,29 @@ impl ProductData {
 
         // As such, it is on us to floor the start and ceiling the end dates for the purposes of comparison
         if self.start_date.is_some() {
-            let itr_start = match NaiveDateTime::parse_from_str(self.start_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S") {
+            let start_date = self.start_date.as_ref().unwrap().replace("T", " ");
+            let itr_start = match NaiveDateTime::parse_from_str(&start_date, "%Y-%m-%d %H:%M:%S") {
                 Ok(utc_start) => { Ok(DateTime::<Utc>::from_naive_utc_and_offset(utc_start, Utc)
                                                         .with_hour(0).unwrap()
                                                         .with_minute(0).unwrap()
                                                         .with_second(0).unwrap()) },
-                _ => Err(())
+                Err(e) => {
+                    error!("Failed to parse '{}': {:?}", self.start_date.as_ref().unwrap(), e);
+                    Err(())
+                }
             };
             if itr_start.is_ok() && itr_start.unwrap() <= whence {
-
+                let end_date = self.end_date.as_ref().unwrap().replace("T", " ");
                 if self.end_date.is_some() {
-                    let itr_end = match NaiveDateTime::parse_from_str(self.end_date.as_ref().unwrap(), "%Y-%m-%dT%H:%M:%S") {
+                    let itr_end = match NaiveDateTime::parse_from_str(&end_date, "%Y-%m-%d %H:%M:%S") {
                         Ok(utc_end) => { Ok(DateTime::<Utc>::from_naive_utc_and_offset(utc_end, Utc)
                                                             .with_hour(23).unwrap()
                                                             .with_minute(59).unwrap()
                                                             .with_second(59).unwrap()) },
-                        _ => Err(())
+                        Err(e) => {
+                            error!("Failed to parse '{}': {:?}", self.end_date.as_ref().unwrap(), e);
+                            Err(())
+                        }
                     };
                     if itr_end.is_ok() && itr_end.unwrap() <= whence {
                         debug!("Product {} has sale in past ({:#?}) {} <= {}", self.description, self.end_date, itr_end.as_ref().unwrap(), whence);
@@ -458,12 +504,14 @@ impl ITRApi {
                     let text_response = result.text().await?;
                     Ok(text_response)
                 } else {
+                    let status = result.status();
+                    let text_response = &result.text().await?;
+                    debug!("{}", text_response);
                     Err(anyhow!(
                         "{}",
-                        result
-                            .status()
+                        status
                             .canonical_reason()
-                            .unwrap_or(&format!("UNKNOWN CODE: {}", result.status().as_str()))
+                            .unwrap_or(&format!("UNKNOWN CODE: {}", status.as_str()))
                     ))
                 }
             }
@@ -642,20 +690,66 @@ impl ITRApi {
     pub async fn get_transactions_details(&mut self, start_o: Option<&DateTime<Local>>, end_o: Option<&DateTime<Local>>) -> Result<Vec<EJTxn>> {
         let end_default = Local::now();
         let end = end_o.unwrap_or(&end_default);
-        let start_default = end.checked_sub_days(Days::new(1)).unwrap();
+        let start_default = end.checked_sub_days(Days::new(2)).unwrap();
         let start = start_o.unwrap_or(&start_default);
         // This returns a productId that is a uuid.  Nowhere else in the APIs can I find a uuid attached to
         // rows of the products, so we don't have a mapping from productid <-> upc
-        let url = format!("/api/ElectronicJournalData/Get?\
+        let url = format!(
+        /*
+          Looks like ITR broke this 2024-07-30
+          Could not find a property named 'TransactionProducts' on type 'ITRetail.Web.Models.ElectronicJournal.TransactionDto'
+            "/api/ElectronicJournalData/Get?\
             $expand=TransactionTenders($select+%3D+TenderCode,LastCardDigits),TransactionProducts($select+%3D+%2A),TransactionProducts($expand=ProductChange($select+%3D+upc))&\
             $filter=(TransactionDate+ge+{}+and++TransactionDate+lt+{})+and+(Total+ne+null)&\
             $orderby=TransactionDate&$select=Id,EmployeeId,TransactionDate,Total,Canceled,CustomerId,CustomerFirstName,CustomerLastName",
             start.to_rfc3339_opts(SecondsFormat::Secs, true),
             end.to_rfc3339_opts(SecondsFormat::Secs, true));
-        let r = self.get(&url)
-            .await
-            .expect("Electronic Journal Output");
-        let answer: EJTAnswer = serde_json::from_str(&r)?;
-        Ok(answer.value)
+        */
+        /* This one is shit b/c their API return CustomerId, but it is always null!
+            "/api/ElectronicJournalData/GetTransactions?from={}&to={}&pageSize=10000",
+            start.format("%Y-%m-%d"), end.format("%Y-%m-%d"));
+        */
+            "/api/ElectronicJournalData/Get?\
+            $expand=TransactionTenders($select+%3D+TenderCode,LastCardDigits)&\
+            $filter=(TransactionDate+ge+{}+and++TransactionDate+lt+{})+and+(Total+ne+null)&\
+            $orderby=TransactionDate&$select=Id,EmployeeId,TransactionDate,Total,Canceled,CustomerId,CustomerFirstName,CustomerLastName",
+            start.to_rfc3339_opts(SecondsFormat::Secs, true),
+            end.to_rfc3339_opts(SecondsFormat::Secs, true));
+        match self.get(&url).await {
+            Ok(r) => {
+                let answer: EJTAnswer = serde_json::from_str(&r)?;
+                Ok(answer.value)
+            },
+            Err(e) => {
+                Err(anyhow!("Electronic Journal Output: {}", e))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_itr_to_upca() {
+        let itr = "0081001211009".to_owned();
+        let expected = "810012110099".to_owned();
+        assert_eq!(Some(expected), itr_upc_to_upca(&itr));
+    }
+    #[test]
+    fn test_itr_to_upca_bad() {
+        assert_eq!(None, itr_upc_to_upca(&"0800004210001".to_owned()));
+
+    }
+    #[test]
+    fn test_itr_weighed_good() {
+        let itr = "0020163400000".to_owned();
+        let expected = "01634".to_owned();
+        assert_eq!(Some(expected), itr_upc_to_upca(&itr));
+    }
+    #[test]
+    fn test_itr_weighed_bad() {
+        assert_eq!(None, itr_upc_to_upca(&"0020163404000".to_owned()));
     }
 }

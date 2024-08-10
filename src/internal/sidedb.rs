@@ -7,11 +7,67 @@ use log::*;
 use uuid::Uuid;
 use std::collections::HashMap;
 
-use super::api::{Customer, ProductData, Tax, ITRTaxId};
+use super::api::{Customer, Department, ITRTaxId, ProductData, Section, ShrinkAmount, Tax};
+
+use squareup::models::{enums::{Currency, OrderState, PaymentSourceType, PaymentStatus}, Money};
+
+struct SSql {}
+impl SSql {
+    pub fn from_order_state(o: &Option<OrderState>) -> Option<String> {
+        match o {
+            None => None,
+            Some(ov) => Some(match ov {
+                &OrderState::Canceled => "Canceled",
+                &OrderState::Completed => "Completed",
+                &OrderState::Draft => "Draft",
+                &OrderState::Open => "Open",
+            }.to_owned()),
+        }
+    }
+    pub fn from_payment_status(o: &Option<PaymentStatus>) -> Option<String> {
+        match o {
+            None => None,
+            Some(ov) => Some(match ov {
+                &PaymentStatus::Approved => "Approved",
+                &PaymentStatus::Canceled => "Canceled",
+                &PaymentStatus::Completed => "Completed",
+                &PaymentStatus::Failed => "Failed",
+                &PaymentStatus::Pending => "Pending",
+            }.to_owned()),
+        }
+    }
+    pub fn from_payment_source_type(o: &Option<PaymentSourceType>) -> Option<String> {
+        match o {
+            None => None,
+            Some(ov) => Some(match ov {
+                &PaymentSourceType::BankAccount => "BankAccount",
+                &PaymentSourceType::BuyNowPayLater => "BuyNowPayLater",
+                &PaymentSourceType::Card => "Card",
+                &PaymentSourceType::Cash => "Cash",
+                &PaymentSourceType::External => "External",
+                &PaymentSourceType::SquareAccount => "SquareAccount",
+                &PaymentSourceType::Wallet => "Wallet",
+            }.to_owned())
+        }
+    }
+    pub fn from_money(o: &Option<Money>) -> Option<Decimal> {
+        match o {
+            None => Some(Decimal::ZERO),
+            Some(ov) => {
+                if ov.currency != Currency::Usd {
+                    None
+                } else {
+                    Some(Decimal::new(ov.amount as i64, 2))
+                }
+            }
+        }
+    }
+}
 
 pub struct SideDb {
     client: tokio_postgres::Client,
     handle: JoinHandle<()>,
+    shrink_reason: u32,
 }
 
 impl Drop for SideDb {
@@ -27,7 +83,7 @@ pub async fn make_sidedb(settings: super::settings::Settings) -> Result<SideDb> 
             error!("connection error: {}", e);
         }
     });
-    Ok(SideDb{client: client, handle: handle})
+    Ok(SideDb{client: client, handle: handle, shrink_reason: settings.itretail.external_sale_shrink_reason})
 }
 
 fn decimal_price(a: &str) -> Decimal {
@@ -282,6 +338,78 @@ impl SideDb {
         Ok(rc > 0)
     }
 
+    pub async fn store_departments<'a, I>(&mut self, depts: I) -> Result<u32>
+    where
+        I: Iterator<Item = &'a super::api::Department>,
+    {
+        let txn = self.client.transaction().await?;
+        let mut cnt = 0;
+        for d in depts {
+                txn.execute("INSERT INTO itrdepartment
+                            (id, name) VALUES($1, $2)
+                            ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name",
+                            &[&d.id, &d.name]).await?;
+            cnt += 1;
+        }
+        txn.commit().await?;
+        Ok(cnt)
+    }
+
+    pub async fn get_departments(&self) -> Result<Vec<Department>> {
+        let rows = self.client.query("SELECT * from itrdepartment", &[]).await?;
+        Ok(rows.iter().map(|x| {
+            Department {
+                id: x.get("id"),
+                name: x.get("name"),
+                squareup_id: x.get("squareup_id")
+            }
+        }).collect())
+    }
+
+    pub async fn associate_department_with_square(&mut self, id: &i32, squareup_id: &String) -> Result<bool> {
+        let txn = self.client.transaction().await?;
+        let rc = txn.execute("UPDATE itrdepartment SET squareup_id=$1 WHERE id = $2", &[squareup_id, id]).await?;
+        txn.commit().await?;
+        Ok(rc > 0)
+    }
+
+    pub async fn store_sections<'a, I>(&mut self, sections: I) -> Result<u32>
+    where
+        I: Iterator<Item = &'a super::api::Section>,
+    {
+        let txn = self.client.transaction().await?;
+        let mut cnt = 0;
+        for s in sections {
+                txn.execute("INSERT INTO itrsection
+                            (id, name, department_id, deleted) VALUES($1, $2, $3, $4)
+                            ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name",
+                            &[&s.id, &s.name, &s.department_id, &s.deleted]).await?;
+            cnt += 1;
+        }
+        txn.commit().await?;
+        Ok(cnt)
+    }
+
+    pub async fn get_sections(&self) -> Result<Vec<Section>> {
+        let rows = self.client.query("SELECT * from itrsection", &[]).await?;
+        Ok(rows.iter().map(|x| {
+            Section {
+                id: x.get("id"),
+                name: x.get("name"),
+                department_id: x.get("department_id"),
+                deleted: x.get("deleted"),
+                squareup_id: x.get("squareup_id")
+            }
+        }).collect())
+    }
+
+    pub async fn associate_section_with_square(&mut self, id: &i32, squareup_id: &String) -> Result<bool> {
+        let txn = self.client.transaction().await?;
+        let rc = txn.execute("UPDATE itrsection SET squareup_id=$1 WHERE id = $2", &[squareup_id, id]).await?;
+        txn.commit().await?;
+        Ok(rc > 0)
+    }
+
     pub async fn store_products<'a, I>(&mut self, products: I) -> Result<u32>
     where
         I: Iterator<Item = &'a super::api::ProductData>,
@@ -338,6 +466,7 @@ impl SideDb {
         txn.commit().await?;
         Ok(cnt)
     }
+
     pub async fn get_products(&mut self, date: Option<&NaiveDate>) -> Result<Vec<ProductData>> {
         let rows = if date.is_some() {
             let dr = date.unwrap();
@@ -368,6 +497,122 @@ impl SideDb {
              }
         }).collect();
         Ok(products)
+    }
+
+    pub async fn shrink_square_products_sold(&mut self, itrapi: &mut super::api::ITRApi) -> Result<u32> {
+        let txn = self.client.transaction().await?;
+        let rows = txn.query("
+            with toshrink as
+            (update sqorderitem
+            set shrink_completed = current_timestamp 
+            where order_id in (select order_id
+                               from sqtxn join sqorder using(order_id)
+            				   where status = 'Completed' and state = 'Completed')
+            	and shrink_completed is null
+            returning squareup_id, quantity)
+            select itrproduct.*, quantity
+            from itrproduct join
+                 (select squareup_id, sum(quantity) as quantity from toshrink group by squareup_id) as shrinkage
+            using(squareup_id)", &[]).await?;
+        let toshrink: Vec<super::api::ShrinkItem> = rows.iter().map(|x| {
+            let pd = ProductData { upc: x.get("upc"), description: x.get("description"),
+                second_description: x.get("second_description"), normal_price: x.get::<&str,Decimal>("normal_price").to_f64().unwrap(),
+                special_price: x.get::<&str,Option<Decimal>>("special_price").and_then(|x| x.to_f64()),
+                start_date: None, end_date: None,
+                scale: x.get("scale"), active: x.get("active"),
+                discountable: if x.get::<&str,bool>("discount") { 1 } else { 0 }, plu: x.get("plu"),
+                deleted: x.get("deleted"), cert_code: x.get("cert_code"), vendor_id: x.get("vendor_id"),
+                department_id: x.get("department_id"), section_id: x.get("section_id"), wicable: x.get("wicable"),
+                foodstamp: x.get("foodstamp"), quantity_on_hand: x.get::<&str,Option<f64>>("quantity_on_hand").and_then(|x| Some(x as f32)), size: x.get("size"),
+                case_cost: x.get::<&str,Option<Decimal>>("case_cost").and_then(|x| x.to_f32()), pack: x.get("pack"),
+                cost: x.get::<&str,Option<Decimal>>("cost").and_then(|x| x.to_f32()),
+                taxclass: ITRTaxId(x.get("taxclass")), squareup_id: x.get("squareup_id"),
+            };
+            let quantity = x.get::<&str,Decimal>("quantity").to_f32().unwrap();
+            super::api::make_shrink_item(
+                &pd,
+                self.shrink_reason,
+                if pd.scale { ShrinkAmount::Weight(quantity)} else { ShrinkAmount::Quantity(quantity as u32) }
+            )
+        }).collect();
+        let cnt = toshrink.len() as u32;
+        itrapi.shrink_product(toshrink).await?;
+        txn.commit().await?;
+        Ok(cnt)
+    }
+
+    pub async fn store_square_transactions(&mut self, payments: &Vec<squareup::models::Payment>) -> Result<u32> {
+        let txn = self.client.transaction().await?;
+        let mut cnt: u32 = 0;
+        for p in payments {
+            let processing_fees = Some(p.processing_fee.as_ref().unwrap_or(&vec![]).iter()
+                .fold(Decimal::ZERO, |acc, e| {
+                    let to_add = SSql::from_money(&e.amount_money).unwrap();
+                    to_add.checked_add(acc).unwrap()
+                }));
+            let created_at: chrono::DateTime<chrono::Utc> = p.created_at.as_ref().unwrap().clone().into();
+            let updated_at: chrono::DateTime<chrono::Utc> = p.updated_at.as_ref().unwrap().clone().into();
+            let rv = txn.execute("INSERT INTO sqtxn (id, customer_id, status, order_id, source_type, amount_money,
+                                                     tip_money, processing_fees, refunded_money, created_at, updated_at)
+                                  VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                                  ON CONFLICT (id) DO UPDATE SET
+                                  status=EXCLUDED.status, source_type=EXCLUDED.source_type, amount_money=EXCLUDED.amount_money,
+                                  tip_money=EXCLUDED.tip_money, processing_Fees=EXCLUDED.processing_fees, refunded_money=EXCLUDED.refunded_money,
+                                  created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at",
+                                &[&p.id, &p.customer_id, &SSql::from_payment_status(&p.status),
+                                &p.order_id, &SSql::from_payment_source_type(&p.source_type),
+                                &SSql::from_money(&p.amount_money), &SSql::from_money(&p.tip_money), &processing_fees,
+                                &SSql::from_money(&p.refunded_money), &created_at, &updated_at]).await?;
+            cnt += rv as u32;
+        }
+        txn.commit().await?;
+        Ok(cnt)
+    }
+
+    pub async fn store_square_orders(&mut self, orders: &Vec<squareup::models::Order>) -> Result<u32> {
+        let txn = self.client.transaction().await?;
+        let mut cnt: u32 = 0;
+        for o in orders {
+            let created_at: chrono::DateTime<chrono::Utc> = o.created_at.as_ref().unwrap().clone().into();
+            let updated_at: chrono::DateTime<chrono::Utc> = o.updated_at.as_ref().unwrap().clone().into();
+            let closed_at: Option<chrono::DateTime<chrono::Utc>> = match &o.closed_at {
+                None => None,
+                Some(time) => Some(time.clone().into()),
+            };
+            let rv = txn.execute("INSERT INTO sqorder (order_id, customer_id, state, total_money, tax_money,
+                                                    discount_money, tip_money, service_charge_money, created_at, updated_at, closed_at)
+                                  VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                                  ON CONFLICT (order_id) DO UPDATE SET
+                                  customer_id=EXCLUDED.customer_id, state=EXCLUDED.state, total_money=EXCLUDED.total_money,
+                                  tax_money=EXCLUDED.tax_money, discount_money=EXCLUDED.discount_money, tip_money=EXCLUDED.tip_money,
+                                  service_charge_money=EXCLUDED.service_charge_money, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at,
+                                  closed_at=EXCLUDED.closed_at",
+                                &[&o.id, &o.customer_id, &SSql::from_order_state(&o.state),
+                                &SSql::from_money(&o.total_money), &SSql::from_money(&o.total_tax_money), &SSql::from_money(&o.total_discount_money),
+                                &SSql::from_money(&o.total_tip_money), &SSql::from_money(&o.total_service_charge_money),
+                                &created_at, &updated_at, &closed_at]).await?;
+            cnt += rv as u32;
+            if o.state == Some(OrderState::Completed) {
+                if let Some(line_items) = &o.line_items {
+                    for li in line_items {
+                        if li.item_type != Some(squareup::models::enums::OrderLineItemItemType::Item) {
+                            continue;
+                        }
+                        let qty = li.quantity.parse::<f64>()?;
+                        let uid = Uuid::try_parse(li.uid.as_ref().unwrap().as_str())?;
+                        let rv = txn.execute("INSERT INTO sqorderitem
+                            (order_id, uid, squareup_id, quantity, base_unit_price)
+                            VALUES($1, $2, $3, $4, $5)
+                            ON CONFLICT (order_id, uid) DO NOTHING",
+                            &[&o.id, &uid, &li.catalog_object_id, &Decimal::from_f64(qty), &SSql::from_money(&li.base_price_money)]).await?;
+                        cnt += rv as u32;
+                    }
+                }
+
+            }
+        }
+        txn.commit().await?;
+        Ok(cnt)
     }
 
     pub async fn get_spend(&mut self, days: u32) -> Result<Vec<(Uuid, Decimal)>> {

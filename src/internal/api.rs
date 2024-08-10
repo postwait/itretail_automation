@@ -8,6 +8,7 @@ use reqwest::header::CONTENT_TYPE;
 
 use serde::{Deserialize, Serialize};
 use serde::de::Deserializer;
+use std::collections::VecDeque;
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
@@ -15,6 +16,40 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use uuid::Uuid;
 
+pub struct ProductFieldAssignments {
+    headers: Vec<String>,
+    items: VecDeque<Vec<String>>,
+}
+impl ProductFieldAssignments {
+    pub fn new(headers: Vec<String>) -> Self {
+        ProductFieldAssignments{
+            headers: headers,
+            items: VecDeque::new(),
+        }
+    }
+    pub fn add(&mut self, item: &Vec<&String>) -> Result<()> {
+        if item.len() != self.headers.len() {
+            return Err(anyhow!("bad item length"))
+        }
+        let fields: Vec<String> = item.iter().map(|x| (*x).to_owned())
+            .filter(|x| !x.contains(',')).collect();
+        if fields.len() != self.headers.len() {
+            return Err(anyhow!("values with commas not supported"));
+        }
+        self.items.push_back(fields);
+        Ok(())
+    }
+    pub fn form_header(&self) -> String {
+        format!("[{}]", self.headers.iter().map(|x| format!("\"{}\"", x)).collect::<Vec<String>>().join(","))
+    }
+    pub fn as_csv(&self) -> String {
+        let mut csv = self.headers.join(",");
+        csv.push_str("\r\n");
+        csv.push_str(&self.items.iter().map(|x| x.join(",")).collect::<Vec<String>>().join("\r\n"));
+        csv.push_str("\r\n");
+        csv
+    }
+}
 pub struct PLUAssignment {
     pub upc: String,
     pub plu: u16,
@@ -34,13 +69,79 @@ pub struct MinimalCustomer {
     #[serde(rename = "FrequentShopper")]
     pub frequent_shopper: bool,
 }
+
 #[derive(Deserialize, Debug)]
-pub struct Section {
-    pub id: u32,
-    pub name: String,
-    #[allow(dead_code)]
+pub struct ITRSection {
+    pub section: i32,
+    pub section_name: String,
+    #[serde(rename = "departmentId")]
+    pub department_id: i32,
+    #[serde(rename = "Deleted")]
     pub deleted: bool,
 }
+
+#[derive(Deserialize, Debug)]
+pub struct ITRSectionsAnswer {
+    pub value: Vec<ITRSection>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Section {
+    pub id: Option<i32>,
+    pub name: String,
+    pub deleted: bool,
+    pub department_id: i32,
+    pub squareup_id: Option<String>,
+}
+
+impl From<&ITRSection> for Section {
+    fn from(item: &ITRSection) -> Self {
+        Section {
+            id: Some(item.section),
+            name: item.section_name.clone(),
+            department_id: item.department_id,
+            deleted: item.deleted,
+            squareup_id: None
+        }
+    }
+}
+
+// This is what a square cateegory will look like in ITRA
+#[derive(Debug, Eq, Hash, PartialEq)]
+pub enum ITRCat {
+    Section(i32),
+    Department(i32)
+}
+
+
+#[derive(Deserialize, Debug)]
+pub struct ITRDepartment {
+    pub dept_no: i32,
+    pub dept_name: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ITRDepartmentsAnswer {
+    pub value: Vec<ITRDepartment>
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Department {
+    pub id: Option<i32>,
+    pub name: String,
+    pub squareup_id: Option<String>,
+}
+
+impl From<&ITRDepartment> for Department {
+    fn from(item: &ITRDepartment) -> Self {
+        Department {
+            id: Some(item.dept_no),
+            name: item.dept_name.clone(),
+            squareup_id: None,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug)]
 pub struct EJTxnProductChange {
     pub upc: String
@@ -177,6 +278,53 @@ pub struct Tax {
 #[derive(Deserialize, Debug)]
 pub struct ITRTaxAnswer {
     value: Vec<Tax>
+}
+
+pub enum ShrinkAmount {
+    Quantity(u32),
+    Weight(f32),
+}
+
+#[derive(Serialize, Debug)]
+pub struct MinimalShrinkProduct {
+    pub upc: String,
+    pub description: String,
+}
+#[derive(Serialize, Debug)]
+pub struct ShrinkItem {
+    pub product: MinimalShrinkProduct,
+    pub upc: String,
+    pub description: String,
+    #[serde(rename = "reasonCodeId")]
+    pub reason_code_id: u32,
+    #[serde(rename = "isWeightItem")]
+    pub is_weight_item: bool,
+    pub quantity: Option<u32>,
+    pub weight: Option<f32>,
+}
+
+pub fn make_shrink_item(item: &ProductData, reason: u32, amount: ShrinkAmount) -> ShrinkItem {
+    ShrinkItem{
+        product: MinimalShrinkProduct{
+            upc: item.upc.clone(),
+            description: item.description.clone(),
+        },
+        upc: item.upc.clone(),
+        description: item.description.clone(),
+        reason_code_id: reason,
+        is_weight_item: match amount {
+            ShrinkAmount::Quantity(_) => false,
+            ShrinkAmount::Weight(_) => true,
+        },
+        quantity: match amount {
+            ShrinkAmount::Quantity(q) => Some(q),
+            _ => None,
+        },
+        weight: match amount {
+            ShrinkAmount::Weight(w) => Some(w),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -554,26 +702,29 @@ impl ITRApi {
         }
     }
 
-    pub async fn set_plu(&mut self, plus: Vec<PLUAssignment>) -> Result<String> {
+    pub async fn set_product_fields(&mut self, pfa: &ProductFieldAssignments) -> Result<String> {
         let endpoint = &"/api/ProductsData/UpdateOnly".to_string();
-        let mut csvcontents = "UPC,PLU\r\n".to_string();
-        csvcontents.push_str(
-            &plus
-                .iter()
-                .map(|ass| format!("{},{}\r\n", ass.upc, ass.plu))
-                .collect::<String>(),
-        );
+        let csvcontents = pfa.as_csv();
         let part = reqwest::multipart::Part::text(csvcontents)
             .file_name("plu.csv")
             .mime_str("text/plain")?;
         let form = reqwest::multipart::Form::new();
         let form = form.part("1", part);
+        let store_id = env::var("ITRETAIL_STOREID")?;
         let form = form
-            .text("2", "[\"upc\",\"PLU\"]")
+            .text("2", pfa.form_header())
             .text("3", "false")
-            .text("5[0]", "198dd573-ca6e-435a-b779-98922ad0185a");
+            .text("5[0]", store_id);
         let r = self.call_multi::<Empty>(reqwest::Method::POST, endpoint, None, form).await;
         r
+    }
+
+    pub async fn set_plu(&mut self, plus: Vec<PLUAssignment>) -> Result<String> {
+        let mut pfa = ProductFieldAssignments::new(vec!["upc".to_owned(),"PLU".to_owned()]);
+        for plua in plus {
+            pfa.add(&vec![&plua.upc, &plua.plu.to_string()])?;
+        }
+        self.set_product_fields(&pfa).await
     }
 
     pub async fn post_json<T: Serialize + ?Sized>(
@@ -633,12 +784,23 @@ impl ITRApi {
         Ok(Some(customer.unwrap()))
     }
 
-    pub async fn get_sections(&mut self) -> Result<Vec<Section>> {
+    pub async fn get_departments(&mut self) -> Result<Vec<Department>> {
         let results = self
-            .get(&"/api/SectionsData/GetAllSections".to_string())
+            .get(&"/api/DepartmentsData/Get?$select=dept_name,dept_no".to_string())
             .await
             .expect("no results from API call");
-        let sections: Vec<Section> = serde_json::from_str(&results)?;
+        let itrdepts: ITRDepartmentsAnswer = serde_json::from_str(&results)?;
+        let depts: Vec<Department> = itrdepts.value.iter().map(|x| x.into()).collect();
+        Ok(depts)
+    }
+
+    pub async fn get_sections(&mut self) -> Result<Vec<Section>> {
+        let results = self
+            .get(&"/api/SectionsData/Get?$select=*".to_string())
+            .await
+            .expect("no results from API call");
+        let itrsections: ITRSectionsAnswer = serde_json::from_str(&results)?;
+        let sections: Vec<Section> = itrsections.value.iter().map(|x| x.into()).collect();
         Ok(sections)
     }
 
@@ -725,6 +887,30 @@ impl ITRApi {
             }
         }
     }
+
+    /*
+    [
+        {"product": {"upc":"0088579290537",...},
+         "upc":"0088579290537",
+         "description":"The Butchers Club Trucker Hat",
+         "reasonCodeId":0,
+         "isWeightItem":false,
+         "quantity":1,
+         "weight":null}
+        {"product":{"upc":"0022170400000",...},
+         "upc":"0022170400000",
+         "description":"Beef Liver",
+         "reasonCodeId":0,
+         "isWeightItem":true,
+         "quantity":null,
+         "weight":1}
+    ]
+     */
+    pub async fn shrink_product(&mut self, todo: Vec<ShrinkItem>) -> Result<()> {
+        let output = self.post_json(&"/api/ShrinkWorksheetData/post".to_string(), &todo).await?;
+        debug!("Shrink: {}", output);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -751,5 +937,23 @@ mod tests {
     #[test]
     fn test_itr_weighed_bad() {
         assert_eq!(None, itr_upc_to_upca(&"0020163404000".to_owned()));
+    }
+    #[test]
+    fn test_generic_plu_assignment() {
+        let plus: Vec<PLUAssignment> = vec![
+            PLUAssignment{ upc: "01230123".to_owned(), plu: 123 },
+            PLUAssignment{ upc: "91829312".to_owned(), plu: 1122 },
+        ];
+        let mut csvcontents = "UPC,PLU\r\n".to_string();
+        csvcontents.push_str(
+            &plus
+                .iter()
+                .map(|ass| format!("{},{}\r\n", ass.upc, ass.plu))
+                .collect::<String>(),
+        );
+
+        let mut pfa = ProductFieldAssignments::new(vec!["UPC".to_owned(),"PLU".to_owned()]);
+        plus.iter().for_each(|x| pfa.add(&vec![&x.upc, &x.plu.to_string()]).expect("good item"));
+        assert_eq!(csvcontents, pfa.as_csv());
     }
 }

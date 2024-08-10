@@ -1,19 +1,24 @@
 use anyhow::{anyhow, Result};
+use chrono::Utc;
 use fancy_regex::Regex;
 use log::*;
+use squareup::models::enums::{CatalogCategoryType, CatalogCustomAttributeDefinitionAppVisibility, CatalogCustomAttributeDefinitionSellerVisibility, CatalogCustomAttributeDefinitionType};
 use std::{collections::HashMap, fmt::Debug};
 use std::time::Duration;
+use std::sync::Arc;
 use squareup::{api::LocationsApi,
               config::{BaseUri, Configuration},
-              models::{enums::{CatalogItemProductType, CatalogObjectType, CatalogPricingType, Currency, InventoryChangeType, InventoryState, MeasurementUnitUnitType, MeasurementUnitWeight}, BatchChangeInventoryRequest, CatalogItem, CatalogItemVariation, CatalogMeasurementUnit, CatalogObject, DateTime, InventoryChange, InventoryPhysicalCount, ItemVariationLocationOverrides, ListCatalogParameters, ListCustomersParameters, Location, MeasurementUnit, Money, UpsertCatalogObjectRequest},
+              models::enums::{CatalogItemProductType, CatalogObjectType, CatalogPricingType, Currency, InventoryChangeType, InventoryState, MeasurementUnitUnitType, MeasurementUnitWeight},
+              models::{BatchChangeInventoryRequest, CatalogItem, CatalogItemVariation, CatalogMeasurementUnit, CatalogObject, CatalogCustomAttributeDefinition, DateTime, InventoryChange, InventoryPhysicalCount, ItemVariationLocationOverrides, ListCatalogParameters, ListCustomersParameters, Location, MeasurementUnit, Money, Payment, Order, UpsertCatalogObjectRequest},
               SquareClient};
 use squareup::http::{Headers, client::{HttpClientConfiguration, RetryConfiguration}};
-use squareup::api::{CatalogApi, CustomerGroupsApi, CustomersApi, InventoryApi};
+use squareup::api::{CatalogApi, CustomerGroupsApi, CustomersApi, InventoryApi, OrdersApi, PaymentsApi};
 use uuid::Uuid;
-use squareup::models::{CreateCustomerGroupRequest, Customer, CustomerGroup, ListCustomerGroupsParameters};
+use squareup::models::{CatalogCategory, CatalogCustomAttributeDefinitionNumberConfig, CatalogCustomAttributeValue, CatalogObjectCategory, CreateCustomerGroupRequest, Customer, CustomerGroup, ListCustomerGroupsParameters, ListPaymentsParameters, SearchOrdersDateTimeFilter, SearchOrdersFilter, SearchOrdersQuery, SearchOrdersRequest, TimeRange};
 
-use super::api::ProductData;
+use super::api::{ITRCat, ProductData};
 
+const CA_BUTCHERS_PLU: &str = "butchers-plu";
 //const MD_LOYALTY_POINTS: &str = "loyalty-points";
 //const MD_LOYALTY_DISCOUNT: &str = "loyalty-discount";
 
@@ -45,7 +50,9 @@ pub struct SquareConnect {
 struct MetaBuilder {
     tax_id: String,
     location_id: String,
-    measurement_id: String
+    measurement_id: String,
+    plu_id: String,
+    categories: Arc<HashMap<ITRCat,String>>
 }
 impl<'a> MetaBuilder {
     pub fn build(&self, product: &'a ProductData) -> ProductDataWithMetadata<'a> {
@@ -54,6 +61,8 @@ impl<'a> MetaBuilder {
             tax_id: self.tax_id.clone(),
             location_id: self.location_id.clone(),
             measurement_id: self.measurement_id.clone(),
+            plu_id: self.plu_id.clone(),
+            categories: Arc::clone(&self.categories),
         }
     }
 }
@@ -62,6 +71,9 @@ struct ProductDataWithMetadata<'a> {
     tax_id: String,
     location_id: String,
     measurement_id: String,
+    #[allow(dead_code)]
+    plu_id: String,
+    categories: Arc<HashMap<ITRCat,String>>,
 }
 
 fn square_phone(maybe_trash: &Option<String>) -> Option<String> {
@@ -99,11 +111,37 @@ impl<'a> From<ProductDataWithMetadata<'a>> for CatalogObject {
             None => None
         };
         let name = (&p.description).to_string();
+        let mut attrs = HashMap::<String, CatalogCustomAttributeValue>::new();
+        if let Some(plu_str) = &p.plu {
+            if let Ok(plu) = plu_str.parse::<u32>() {
+                if plu > 0 && plu < 10000 {
+                    attrs.insert(CA_BUTCHERS_PLU.to_owned(), CatalogCustomAttributeValue{
+                        number_value: Some(plu_str.to_owned()),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        let itrcat = match pwl.product.section_id {
+            Some(id) => pwl.categories.get(&ITRCat::Section(id)),
+            None => pwl.categories.get(&ITRCat::Department(pwl.product.department_id))
+        };
+        let (reporting_category, categories) = match itrcat {
+            Some(cat) => (Some(CatalogObjectCategory{
+                id: Some(cat.to_owned()),
+                ordinal: None,
+            }), Some(vec![CatalogObjectCategory {
+                id: Some(cat.to_owned()),
+                ordinal: None,
+            }])),
+            None => (None, None),
+        };
         CatalogObject {
             r#type: CatalogObjectType::Item,
             id: format!("#{}", p.upc),
             is_deleted: Some(p.deleted),
             present_at_all_locations: Some(true),
+            custom_attribute_values: if attrs.len() > 0 { Some(attrs) } else { None },
             item_data: Some(CatalogItem {
                 name: Some(name.to_string()),
                 is_taxable: Some(true), // tax_ids controls this
@@ -114,6 +152,8 @@ impl<'a> From<ProductDataWithMetadata<'a>> for CatalogObject {
                 description_plaintext: None,
                 product_type: Some(CatalogItemProductType::Regular),
                 is_archived: Some(p.deleted),
+                categories: categories,
+                reporting_category: reporting_category,
                 variations: Some(vec![
                     CatalogObject {
                         r#type: CatalogObjectType::ItemVariation,
@@ -154,6 +194,36 @@ impl<'a> From<ProductDataWithMetadata<'a>> for CatalogObject {
     }
 }
 
+fn make_category(_id: &ITRCat, name: &String, parent: Option<&String>, online: bool) -> CatalogObject {
+    CatalogObject {
+        r#type: CatalogObjectType::Category,
+        id: "#newcat".to_owned(),
+        present_at_all_locations: Some(true),
+        category_data: Some(
+            match parent {
+                Some(pid) => CatalogCategory{
+                    name: Some(name.clone()),
+                    category_type: Some(CatalogCategoryType::RegularCategory),
+                    online_visibility: Some(online),
+                    is_top_level: Some(false),
+                    parent_category: Some(CatalogObjectCategory{
+                        id: Some(pid.clone()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                None => CatalogCategory{
+                    name: Some(name.clone()),
+                    category_type: Some(CatalogCategoryType::RegularCategory),
+                    online_visibility: Some(online),
+                    is_top_level: Some(true),
+                    ..Default::default()
+                }
+        }),
+        ..Default::default()
+    }
+}
+
 fn get_variant_item_id(a: &CatalogObject) -> Option<String> {
     if a.r#type == CatalogObjectType::Item && a.item_data.is_some() {
         let a1 = a.item_data.as_ref().unwrap();
@@ -190,6 +260,22 @@ fn new_inventory_physical_count(variant_item_id: &String, oa: &DateTime, locatio
     }
 }
 
+fn get_catalogitem_plu(i: &CatalogObject) -> Option<String> {
+    if let Some(avs) = &i.custom_attribute_values {
+        if let Some(pluv) = avs.get(&CA_BUTCHERS_PLU.to_owned()) {
+            if let Some(plustr) = &pluv.number_value {
+                // There's a but (as far as I can see, that even with precision 0, we get nnn.0 back)
+                let plu = match plustr.strip_suffix(".0") {
+                    Some(simplified) => simplified.to_owned(),
+                    None => plustr.clone(),
+                };
+                return Some(plu);
+            }
+        }
+    }
+    None
+}
+
 fn catalogitem_needs_update(a: &CatalogObject, b: &CatalogObject) -> Result<Option<String>> {
     // verify our structure [Object[0] -> Item[1] -> Object[2] -> ItemVariation[3] -> ItemVariableLocationOverrides[4] ]
     // Object[1]
@@ -199,6 +285,8 @@ fn catalogitem_needs_update(a: &CatalogObject, b: &CatalogObject) -> Result<Opti
     if a.present_at_all_locations != b.present_at_all_locations { return Ok(Some("present_at_all_locations".to_owned())); }
     if a.present_at_location_ids != b.present_at_location_ids { return Ok(Some("present_at_location_ids".to_owned())); }
     if a.absent_at_location_ids != b.absent_at_location_ids { return Ok(Some("present_at_location_ids".to_owned())); }
+    // PLU?
+    if get_catalogitem_plu(a) != get_catalogitem_plu(b) { return Ok(Some("plu differs".to_owned())); }
     // Item
     let (a1, b1) = (a.item_data.as_ref().unwrap(), b.item_data.as_ref().unwrap());
     if a1.name != b1.name { return Ok(Some("name".to_owned())); }
@@ -209,6 +297,25 @@ fn catalogitem_needs_update(a: &CatalogObject, b: &CatalogObject) -> Result<Opti
     if a1.description_plaintext != b1.description_plaintext { return Ok(Some("description_plaintext".to_owned())); }
     if a1.product_type != b1.product_type { return Ok(Some("product_type".to_owned())); }
     if a1.is_archived != b1.is_archived { return Ok(Some("is_archived".to_owned())); }
+    // Categories
+    match (&a1.categories, &b1.categories) {
+        (None, None) => {},
+        (Some(acs), Some(bcs)) => {
+            if acs.len() != 1 || bcs.len() != 1 { return Ok(Some("categories".to_owned())); }
+            if acs[0].id != bcs[0].id { return Ok(Some("categories".to_owned())); }
+        },
+        (Some(_), None) => { return Ok(Some("categories".to_owned())); },
+        (None, Some(_)) => { return Ok(Some("categories".to_owned())); },
+
+    };
+    match (&a1.reporting_category, &b1.reporting_category) {
+        (None, None) => {}
+        (Some(ac), Some(bc)) => {
+            if ac.id != bc.id { return Ok(Some("reporting_category".to_owned())); }
+        },
+        (Some(_), None) => { return Ok(Some("reporting_category".to_owned())); },
+        (None, Some(_)) => { return Ok(Some("reporting_category".to_owned())); },
+    };
     // Object
     if a1.variations.is_none() || b1.variations.is_none() { return Err(anyhow!("missing variation")); }
     if a1.variations.as_ref().unwrap().len() != 1 || b1.variations.as_ref().unwrap().len() != 1 {
@@ -692,6 +799,7 @@ impl SquareConnect {
         }
         return Err(anyhow!("Cannot find state in location for {}", self.location));
     }
+
     pub async fn get_measurement_id(&self) -> Result<String> {
         let catalogapi = CatalogApi::new(self.client.clone());
         let mut id = "#newmeasure".to_owned();
@@ -744,6 +852,56 @@ impl SquareConnect {
             return Ok(o.id.clone());
         }
         Err(anyhow!("Failed to create required weight-based measurement units."))
+    }
+
+    pub async fn get_plu_custom_id(&self) -> Result<String> {
+        let catalogapi = CatalogApi::new(self.client.clone());
+        let response = catalogapi.list_catalog(&ListCatalogParameters{
+            types: Some(vec![CatalogObjectType::CustomAttributeDefinition]),
+            ..Default::default()
+        }).await?;
+        if let Some(attrs) = response.objects {
+            for a in &attrs {
+                if a.is_deleted.unwrap_or(false) || a.r#type != CatalogObjectType::CustomAttributeDefinition {
+                    continue;
+                }
+                if let Some(attr_def) = &a.custom_attribute_definition_data {
+                    if let Some(key) = &attr_def.key {
+                        if key == CA_BUTCHERS_PLU {
+                                debug!("Found existing custom PLU definition: {}", a.id);
+                            return Ok(a.id.to_owned())
+                        }
+                    }
+                }
+            }
+        }
+        // Must create this.
+        let response = catalogapi.upsert_catalog_object(&UpsertCatalogObjectRequest{
+            idempotency_key: Uuid::new_v4().to_string(),
+            object: CatalogObject {
+                r#type: CatalogObjectType::CustomAttributeDefinition,
+                id: "#newplu".to_owned(),
+                custom_attribute_definition_data: Some(CatalogCustomAttributeDefinition{
+                    r#type: CatalogCustomAttributeDefinitionType::Number,
+                    name: "PLU".to_owned(),
+                    description: Some("PLU for programming external scales.".to_owned()),
+                    allowed_object_types: vec![CatalogObjectType::Item],
+                    seller_visibility: Some(CatalogCustomAttributeDefinitionSellerVisibility::SellerVisibilityReadWriteValues),
+                    app_visibility: Some(CatalogCustomAttributeDefinitionAppVisibility::AppVisibilityReadWriteValues),
+                    key: Some(CA_BUTCHERS_PLU.to_owned()),
+                    number_config: Some(CatalogCustomAttributeDefinitionNumberConfig{
+                        precision: Some(0)
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        }).await?;
+        if let Some(o) = response.catalog_object {
+            debug!("Created new custom PLU attribute for items: {}", o.id);
+            return Ok(o.id.clone());
+        }
+        Err(anyhow!("Failed to create required PLU attribute."))
     }
 
     pub async fn get_tax(&self, which: TaxLocation<'_>) -> Result<CatalogObject> {
@@ -807,15 +965,14 @@ impl SquareConnect {
         }
     }
 
-    pub async fn get_products(&self) -> Result<Vec<CatalogObject>> {
+    pub async fn get_catalog_objects(&self, types: Vec<CatalogObjectType>) -> Result<Vec<CatalogObject>> {
         let catalog_api = CatalogApi::new(self.client.clone());
         let mut cursor: Option<String> = None;
         let mut products: Vec<CatalogObject> = vec![];
         loop {
-            let types = vec![CatalogObjectType::Item];
             let res = catalog_api.list_catalog(&ListCatalogParameters {
                 cursor: cursor,
-                types: Some(types),
+                types: Some(types.clone()),
                 ..Default::default()
             }).await?;
             if let Some(objs) = res.objects {
@@ -826,6 +983,11 @@ impl SquareConnect {
         }
         Ok(products)
     }
+
+    pub async fn get_products(&self) -> Result<Vec<CatalogObject>> {
+        self.get_catalog_objects(vec![CatalogObjectType::Item]).await
+    }
+
     pub async fn update_product(&self, p: CatalogObject) -> Result<CatalogObject> {
         let catalogapi = CatalogApi::new(self.client.clone());
         let response =
@@ -885,6 +1047,115 @@ impl SquareConnect {
         }
     }
 
+    pub async fn sync_categories_with_sidedb(&self, sidedb: &mut super::sidedb::SideDb) -> Result<HashMap<ITRCat,String>> {
+        let depts = sidedb.get_departments().await?;
+        let sections = sidedb.get_sections().await?;
+        let catalogapi = CatalogApi::new(self.client.clone());
+        let catalog = self.get_catalog_objects(vec![CatalogObjectType::Category]).await?;
+        let mut squaremap = HashMap::<&String,ITRCat>::new();
+        let mut itrmap = HashMap::<ITRCat,String>::new();
+        // setup the existing mappings
+        for d in &depts {
+            if let Some(squareup_id) = &d.squareup_id {
+                if let Some(dept_id) = &d.id {
+                    squaremap.insert(squareup_id, ITRCat::Department(*dept_id));
+                    itrmap.insert(ITRCat::Department(*dept_id), squareup_id.clone()); 
+                }
+            }
+        }
+        for s in &sections {
+            if let Some(squareup_id) = &s.squareup_id {
+                if let Some(section_id) = &s.id {
+                    squaremap.insert(squareup_id, ITRCat::Section(*section_id));
+                    itrmap.insert(ITRCat::Section(*section_id), squareup_id.clone()); 
+                }
+            }
+        }
+        for c in &catalog {
+            if c.r#type != CatalogObjectType::Category {
+                error!("Asked for categories, not a category!: {:#?}", c);
+                continue;
+            }
+            match squaremap.get(&c.id) {
+                Some(_existing) => {},
+                None => {
+                    // See if we have a candidate
+                    if let Some(cdata) = &c.category_data {
+                            if cdata.is_top_level.unwrap_or(true) {
+                                // a Department in ITR
+                                if let Some(found) = depts.iter().find(|x| Some(&x.name) == cdata.name.as_ref()) {
+                                    if found.squareup_id.is_none() && found.id.is_some() {
+                                        let rv = sidedb.associate_department_with_square(&found.id.unwrap(), &c.id).await?;
+                                        debug!("succeeded associating cat({}) with department({}): {}", c.id, found.id.unwrap(), rv);
+                                        if rv {
+                                            squaremap.insert(&c.id, ITRCat::Department(found.id.unwrap()));
+                                            itrmap.insert(ITRCat::Department(found.id.unwrap()), c.id.clone()); 
+                                        }
+                                    }
+                                }
+                            } else {
+                                // a Section in ITR
+                                if let Some(found) = sections.iter().find(|x| Some(&x.name) == cdata.name.as_ref()) {
+                                    if found.squareup_id.is_none() && found.id.is_some() {
+                                        let rv = sidedb.associate_section_with_square(&found.id.unwrap(), &c.id).await?;
+                                        debug!("succeeded associating cat({}) with section({}): {}", c.id, found.id.unwrap(), rv);
+                                        if rv {
+                                            squaremap.insert(&c.id, ITRCat::Section(found.id.unwrap()));
+                                            itrmap.insert(ITRCat::Section(found.id.unwrap()), c.id.clone()); 
+                                        }
+                                    }
+                                }
+                            }
+                    }
+                }
+            }
+        }
+        for d in &depts {
+            if let Some(dept_id) = d.id {
+                if None == itrmap.get(&ITRCat::Department(dept_id)) {
+                    debug!("Need to create square category for department: {}/{}", dept_id, d.name);
+                    match catalogapi.upsert_catalog_object(&UpsertCatalogObjectRequest {
+                        idempotency_key: Uuid::new_v4().to_string(),
+                        object: make_category(&ITRCat::Department(dept_id), &d.name, None, true),
+                    }).await {
+                        Ok(r) => {
+                            if let Some(co) = r.catalog_object {
+                                itrmap.insert(ITRCat::Department(dept_id), co.id.clone());
+                                sidedb.associate_department_with_square(&dept_id, &co.id).await?;
+                            } else {
+                                error!("Create catagory failed: {:?}", r.errors)
+                            }
+                        }
+                        Err(e) => { return Err(e.into()) }
+                    }
+                }
+            }
+        }
+        for s in &sections {
+            if let Some(section_id) = s.id {
+                if None == itrmap.get(&ITRCat::Section(section_id)) {
+                    debug!("Need to create square category for section: {}/{}", section_id, s.name);
+                    if let Some(parent) = itrmap.get(&ITRCat::Department(s.department_id)) {
+                        match catalogapi.upsert_catalog_object(&UpsertCatalogObjectRequest {
+                            idempotency_key: Uuid::new_v4().to_string(),
+                            object: make_category(&ITRCat::Section(section_id), &s.name, Some(parent), true),
+                        }).await {
+                            Ok(r) => {
+                                if let Some(co) = r.catalog_object {
+                                    itrmap.insert(ITRCat::Section(section_id), co.id.clone());
+                                    sidedb.associate_section_with_square(&section_id, &co.id).await?;
+                                } else {
+                                    error!("Create catagory failed: {:?}", r.errors)
+                                }
+                            }
+                            Err(e) => { return Err(e.into()) }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(itrmap)
+    }
     pub async fn sync_products_with_sidedb(&self, sidedb: &mut super::sidedb::SideDb, set_inventory: bool) -> Result<SquareSyncResult> {
         let mut added_up: u64 = 0;
         let mut updated_up: u64 = 0;
@@ -893,11 +1164,15 @@ impl SquareConnect {
 
         let location = self.get_location(self.location.to_string()).await?;
         let tax = self.get_tax(TaxLocation::Location(&location)).await?;
+        let categories = self.sync_categories_with_sidedb(sidedb).await?;
         let weight_measure_id = self.get_measurement_id().await?;
+        let plu_id = self.get_plu_custom_id().await?;
         let meta_builder = MetaBuilder {
             location_id: location.id.as_ref().unwrap().clone(),
             tax_id: tax.id.clone(),
             measurement_id: weight_measure_id,
+            plu_id: plu_id,
+            categories: Arc::new(categories),
         };
         let items = self.get_products().await?;
         let mut product_by_sku = HashMap::<String,&CatalogObject>::new();
@@ -993,8 +1268,10 @@ impl SquareConnect {
                     }
                 }
             } {
-                error!{"inv_count adding: {}", &variant_item_id};
-                inv_count.push(new_inventory_physical_count(&variant_item_id, &now, location.id.as_ref().unwrap(), dbprod.quantity_on_hand.unwrap_or(0.0)));
+                if set_inventory {
+                    debug!{"inv_count adding: {}", &variant_item_id};
+                    inv_count.push(new_inventory_physical_count(&variant_item_id, &now, location.id.as_ref().unwrap(), dbprod.quantity_on_hand.unwrap_or(0.0)));
+                }
             }
         }
         let mut set_inv_up: u64 = 0;
@@ -1032,6 +1309,71 @@ impl SquareConnect {
             }
         }
         Ok(SquareSyncResult { added_up: added_up, added_down: 0, deleted_up: 0, updated_up: updated_up, set_inv_up: set_inv_up })
+    }
+
+    pub async fn sync_transactions_with_sidedb(&self, sidedb: &mut super::sidedb::SideDb) -> Result<u32> {
+        let paymentapi = PaymentsApi::new(self.client.clone());
+        let now = Utc::now();
+        let start = now.checked_sub_days(chrono::Days::new(7)).unwrap();
+        let our_start: DateTime = (&start).into();
+        let mut cursor = None;
+        let mut txns: Vec<Payment> = vec![];
+        loop {
+            let payments = paymentapi.list_payments(&ListPaymentsParameters{
+                begin_time: Some(our_start.clone()),
+                cursor: cursor,
+                ..Default::default()
+            }).await?;
+            if let Some(pvec) = payments.payments {
+                for txn in &pvec {
+                    debug!("Payment: {:?} @ {:?}", txn.id, txn.created_at);
+                    txns.push(txn.clone());
+                }
+            }
+            cursor = payments.cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let txn_cnt = sidedb.store_square_transactions(&txns).await?;
+
+        // Now orders.
+        let ordersapi = OrdersApi::new(self.client.clone());
+        let locations: Vec<String> = self.get_locations().await?.iter().map(|x| x.id.as_ref().unwrap().to_owned()).collect();
+        let mut orders: Vec<Order> = vec![];
+        loop {
+            let ordersresponse = ordersapi.search_orders(&SearchOrdersRequest{
+                location_ids: Some(locations.clone()),
+                limit: Some(1000),
+                return_entries: Some(false),
+                cursor: cursor,
+                query: Some(SearchOrdersQuery{
+                    filter: Some(SearchOrdersFilter{
+                        date_time_filter: Some(SearchOrdersDateTimeFilter{
+                            updated_at: Some(TimeRange{
+                                start_at: Some(our_start.clone()),
+                                end_at: None,
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    sort: None,
+                }),
+            }).await?;
+            if let Some(os) = &ordersresponse.orders {
+                for o in os {
+                    debug!("Order: {:?}", o.id);
+                    orders.push(o.clone());
+                }
+            }
+            cursor = ordersresponse.cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let order_cnt = sidedb.store_square_orders(&orders).await?;
+        Ok(txn_cnt + order_cnt)
     }
 }
 

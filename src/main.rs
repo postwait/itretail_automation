@@ -681,7 +681,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                if do_square_customers /* || do_all */ {
+                if do_square_customers || do_all {
                     info!("Starting square customer sync.");
                     let r = internal::square::square_connect_create(&settings);
                     match r.sync_customers_with_sidedb(&mut sidedb).await {
@@ -690,8 +690,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
+                if do_orders || do_all {
+                    info!("Starting Square orders sync.");
+                    let r = internal::square::square_connect_create(&settings);
+                    match r.sync_transactions_with_sidedb(&mut sidedb).await {
+                        Ok(_v) => {}
+                        Err(e) => error!("Square Payments/Orders sync error: {}", e)
+                    }
+
+                    match sidedb.shrink_square_products_sold(&mut api).await {
+                        Ok(v) => if v > 0 { info!("ITR item shrink due to square sales {:?}", v) },
+                        Err(e) => error!("Square Payments/Orders sync error: {}", e)
+                    }
+
+                    info!("Starting LocalExpress orders sync.");
+                    let mut auth_error = false;
+                    loop {
+                        let lehandle = internal::localexpress::create_api();
+                        if lehandle.is_err() {
+                            panic!("{}", lehandle.err().unwrap())
+                        }
+                        let mut leapi = lehandle.ok().unwrap();
+                        match leapi.auth().await  {
+                            Err(err) => {
+                                error!("Error authenticating with LocalExpress: {}", err);
+                                std::process::exit(exitcode::SOFTWARE);
+                            },
+                            _ => {}
+                        }
+                        let r = leapi.get_orders().await;
+                        if r.is_err() {
+                            if !auth_error && r.as_ref().err().unwrap().to_string().eq("Unauthorized") {
+                                warn!("Reauthorizing LocalExpress: {}", r.as_ref().err().unwrap());
+                                auth_error = true;
+                                continue;
+                            }
+                            error!("Error fetching LocalExpress orders: {}", r.err().unwrap());
+                            std::process::exit(exitcode::SOFTWARE);
+                        } else {
+                            let ro = sidedb.store_orders(r.unwrap().iter()).await;
+                            if ro.is_err() {
+                                error!("Failed to store LE orders: {}", ro.err().unwrap());
+                                std::process::exit(exitcode::SOFTWARE);
+                            } else {
+                                info!("Pushed {} LE orders.", ro.unwrap());
+                            }
+                        }
+                        break;
+                    }
+                    progress = true;
+                }
+
                 if do_products || do_all {
                     info!("Starting product sync.");
+                    debug!("syncing taxes.");
                     let r = api.get_tax().await;
                     if r.is_err() {
                         error!("Error fetching IT Retail taxes: {}", r.err().unwrap());
@@ -707,6 +759,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
 
+                    debug!("syncing departments.");
+                    let r = api.get_departments().await;
+                    if r.is_err() {
+                        error!("Error fetching IT Retail departments: {}", r.err().unwrap());
+                        std::process::exit(exitcode::SOFTWARE);
+                    } else {
+                        let depts = r.unwrap();
+                        let ro = sidedb.store_departments(depts.iter()).await;
+                        if ro.is_err() {
+                            error!("Failed to store IT Retail departments: {}", ro.err().unwrap());
+                            std::process::exit(exitcode::SOFTWARE);
+                        } else {
+                            info!("Pushed {} IT Retail departments.", ro.unwrap());
+                        }
+                    }
+
+                    debug!("syncing sections.");
+                    let r = api.get_sections().await;
+                    if r.is_err() {
+                        error!("Error fetching IT Retail sections: {}", r.err().unwrap());
+                        std::process::exit(exitcode::SOFTWARE);
+                    } else {
+                        let sections = r.unwrap();
+                        let ro = sidedb.store_sections(sections.iter()).await;
+                        if ro.is_err() {
+                            error!("Failed to store IT Retail sections: {}", ro.err().unwrap());
+                            std::process::exit(exitcode::SOFTWARE);
+                        } else {
+                            info!("Pushed {} IT Retail sections.", ro.unwrap());
+                        }
+                    }
+
+                    debug!("syncing products.");
                     let r= api.get_products().await;
                     if r.is_err() {
                         error!("Error fetching IT Retail products: {}", r.err().unwrap());
@@ -724,7 +809,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     progress = true;
                 }
 
-                if do_square_products || do_square_inventory /* || do_all */ {
+                if do_square_products || do_square_inventory || do_all {
                     info!("Starting square product sync.");
                     let r = internal::square::square_connect_create(&settings);
                     match r.sync_products_with_sidedb(&mut sidedb, do_square_inventory || do_all).await {
@@ -769,45 +854,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
     
-                if do_orders || do_all {
-                    info!("Starting LocalExpress orders sync.");
-                    let mut auth_error = false;
-                    loop {
-                        let lehandle = internal::localexpress::create_api();
-                        if lehandle.is_err() {
-                            panic!("{}", lehandle.err().unwrap())
-                        }
-                        let mut leapi = lehandle.ok().unwrap();
-                        match leapi.auth().await  {
-                            Err(err) => {
-                                error!("Error authenticating with LocalExpress: {}", err);
-                                std::process::exit(exitcode::SOFTWARE);
-                            },
-                            _ => {}
-                        }
-                        let r = leapi.get_orders().await;
-                        if r.is_err() {
-                            if !auth_error && r.as_ref().err().unwrap().to_string().eq("Unauthorized") {
-                                warn!("Reauthorizing LocalExpress: {}", r.as_ref().err().unwrap());
-                                auth_error = true;
-                                continue;
-                            }
-                            error!("Error fetching LocalExpress orders: {}", r.err().unwrap());
-                            std::process::exit(exitcode::SOFTWARE);
-                        } else {
-                            let ro = sidedb.store_orders(r.unwrap().iter()).await;
-                            if ro.is_err() {
-                                error!("Failed to store LE orders: {}", ro.err().unwrap());
-                                std::process::exit(exitcode::SOFTWARE);
-                            } else {
-                                info!("Pushed {} LE orders.", ro.unwrap());
-                            }
-                        }
-                        break;
-                    }
-                    progress = true;
-                }
-
                 if period <= 0 || !progress {
                     break;
                 }

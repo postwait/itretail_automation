@@ -1160,7 +1160,7 @@ impl Scales {
             .get_sections()
             .await?
             .iter()
-            .map(|s| (s.id as i32, s.name.to_owned()))
+            .map(|s| (s.id.unwrap_or(0) as i32, s.name.to_owned()))
             .collect();
 
         const FIELDS: [&str; 3] = ["PLU", "Name", "Price"];

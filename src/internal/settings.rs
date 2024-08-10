@@ -8,6 +8,7 @@ pub struct ITRetail {
     pub username: String,
     pub password: String,
     pub store_id: String,
+    pub external_sale_shrink_reason: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -109,6 +110,7 @@ impl Settings {
             .set_default("itretail.store_id", "")?
             .set_default("itretail.username", "")?
             .set_default("itretail.password", "")?
+            .set_default("itretail.external_sale_shrink_reason", 5)?
             .set_default("postgres.connect_string", "")?
             .set_default("mailchimp.token", "")?
             .set_default("mailchimp.dc", "us21")?

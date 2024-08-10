@@ -2787,7 +2787,6 @@ dependencies = [
 [[package]]
 name = "squareup"
 version = "2.10.1"
-source = "git+https://github.com/postwait/squareup.git?branch=BatchChangeInventoryRequest-type#0f55cfea34ed4468f238be77472202bc1d65dd12"
 dependencies = [
  "async-trait",
  "chrono",

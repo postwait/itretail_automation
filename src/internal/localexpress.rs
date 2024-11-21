@@ -87,8 +87,8 @@ pub struct Order {
     pub payment_method: String,
     pub customer_first_name: String,
     pub customer_last_name: String,
-    pub customer_phone_number: String,
-    pub customer_email: String,
+    pub customer_phone_number: Option<String>,
+    pub customer_email: Option<String>,
     #[serde(with = "le_datetime_format")]
     pub creation_date: NaiveDateTime,
     #[serde(with = "le_date_format")]
@@ -400,6 +400,7 @@ impl LEApi {
         let endpoint = "/rest/v2/store/all/order?expand=productsCount,driverName&perPage=50&page=0".to_string();
         let filter = json!({"filter":{"creation_date":[yesterday.format("%Y-%m-%d").to_string(),future.format("%Y-%m-%d").to_string()]},"filterType":"basic"});
         let r = self.post_json(&endpoint, &filter).await?;
+        println!("{}", r);
         let response: OrdersResponse = serde_json::from_str(&r)?;
         Ok(response.data.result)
     }

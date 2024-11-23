@@ -72,6 +72,17 @@ struct OrdersResponse {
 struct OrdersData {
     result: Vec<Order>,
 }
+
+#[derive(Deserialize, Debug)]
+pub struct ParkingSlotInfo {
+    pub name: String,
+    pub description: String,
+}
+#[derive(Deserialize, Debug)]
+pub struct CurbsidePickupInfo {
+    pub notes: String,
+    pub parking_slot: ParkingSlotInfo,
+}
 #[derive(Deserialize, Debug)]
 pub struct Order {
     #[serde(with = "le_u64_string")]
@@ -94,6 +105,7 @@ pub struct Order {
     #[serde(with = "le_date_format")]
     pub delivery_date: NaiveDate,
     pub delivery_time_period: String,
+    pub curbsidePickupInfo: Option<CurbsidePickupInfo>,
 }
 
 impl Order {
@@ -395,12 +407,12 @@ impl LEApi {
     }
 
     pub async fn get_current_orders(&mut self) -> Result<Vec<Order>> {
-        let yesterday = Local::now().date_naive().checked_sub_days(Days::new(1)).unwrap();
+        let yesterday = Local::now().date_naive().checked_sub_days(Days::new(30)).unwrap();
         let future = yesterday.checked_add_months(Months::new(3)).unwrap();
-        let endpoint = "/rest/v2/store/all/order?expand=productsCount,driverName&perPage=50&page=0".to_string();
+        // https://api.localexpress.io/rest/v2/store/3920/order/7444491/details?expand=assembledByEmail%2CexcludeFromCollectingThrottling%2CadditionalFees%2CcurbsidePickupInfo%2Cpacks%2Cproducts%2Cwrapping%2Ctransactions%2CappliedTaxes%2CcouponDeduction%2CproductShippingPackagingBoxes%2CshippingTransactions%2CisAgeVerificationRequired%2CisAgeVerified%2CpreSelectedShippingMessage%2CshippingRate%2Cleft_to_pay%2ChasDeliProducts%2CcouponCode%2CcouponName%2CdeliveryFeeRemoval%2CcollectingFeeRemoval%2CnotFinalizedCustomerRelatedOrders%2CorderSummary&productExpand=modification%2Cdiscounts%2Cdiscount%2CdiscountPrice%2CproductPriceUnits%2CadditionalDiscount
+        let endpoint = "/rest/v2/store/all/order?expand=productsCount%2CcurbsidePickupInfo,driverName&perPage=100&page=0".to_string();
         let filter = json!({"filter":{"creation_date":[yesterday.format("%Y-%m-%d").to_string(),future.format("%Y-%m-%d").to_string()]},"filterType":"basic"});
         let r = self.post_json(&endpoint, &filter).await?;
-        println!("{}", r);
         let response: OrdersResponse = serde_json::from_str(&r)?;
         Ok(response.data.result)
     }

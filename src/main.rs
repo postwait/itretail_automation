@@ -619,7 +619,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 });
                 let parked_cnt = orders.iter().fold(0, |a, x| {
-                    if x.curbsidePickupInfo.is_some() && x.status == "assembled" {
+                    if x.curbside_pickup_info.is_some() && x.status == "assembled" {
                         a + 1
                     }
                     else {

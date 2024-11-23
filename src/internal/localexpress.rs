@@ -74,11 +74,13 @@ struct OrdersData {
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 pub struct ParkingSlotInfo {
     pub name: String,
     pub description: String,
 }
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 pub struct CurbsidePickupInfo {
     pub notes: String,
     pub parking_slot: ParkingSlotInfo,
@@ -105,7 +107,8 @@ pub struct Order {
     #[serde(with = "le_date_format")]
     pub delivery_date: NaiveDate,
     pub delivery_time_period: String,
-    pub curbsidePickupInfo: Option<CurbsidePickupInfo>,
+    #[serde(rename = "curbsidePickupInfo")]
+    pub curbside_pickup_info: Option<CurbsidePickupInfo>,
 }
 
 impl Order {

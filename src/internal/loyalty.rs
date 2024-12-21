@@ -37,6 +37,7 @@ pub async fn apply_discounts(
     args: &ArgMatches,
 ) -> Result<()> {
     let days = args.get_one::<u32>("days").unwrap();
+    let customer = args.get_one::<String>("email");
     let noop = args.get_one::<bool>("noop").unwrap();
     let normalize = (*days as f64) / 180.0;
     let mut hoh_lookup: HashMap<Uuid,Uuid> = HashMap::new();
@@ -47,7 +48,9 @@ pub async fn apply_discounts(
     let customer_vec = sidedb.get_customers().await?;
     let mut customers = HashMap::new();
     for c in customer_vec.iter() {
-        customers.insert(c.id.clone(), c);
+        if customer.is_none() || (c.email.is_some() && c.email.as_ref().unwrap() == customer.unwrap()) {
+            customers.insert(c.id.clone(), c);
+        }
     }
     let mut txn_totals: HashMap<Uuid, f64> = HashMap::new();
     for t in spend_vec.iter() {
